@@ -35,6 +35,15 @@ class Client():
         
         self.dhe() # criar a chave publica dh para enviar ao servidor
         
+        # derivar a chave partilhada de acordo com cifra utilizada
+        self.get_key()
+        print(len(self.key))
+        
+        # inicializar o modo
+        self.get_mode()
+        
+        self.get_cipher()
+        
         
     def get_protocols_from_server(self):
         req_protocols = requests.get(f'{SERVER_URL}/api/protocols')
@@ -49,6 +58,9 @@ class Client():
     
     def choose_protocol(self):
         ret = { k: op[random.randint(0, len(op)-1)] for k, op in self.server_protocols.items() }
+        self.cipher = ret['ciphers']        
+        self.mode = ret['modes']
+        self.digest = ret['digests']
         logger.info(f'Protocols chosen:\n\tCipher: {ret["ciphers"]}\n\tMode: {ret["modes"]}\n\tDigest: {ret["digests"]}')
         return ret
 
@@ -82,29 +94,32 @@ class Client():
         server_public_key = serialization.load_der_public_key(server_public_key, backend=default_backend())
         
         self.shared_key = private_key.exchange(server_public_key)
-        print(self.shared_key)
-        
+        # print(self.shared_key)
+
         # logger.debug(f'chave partilhada: {self.shared_key}')
         
-        # criptograma - cifra simetrica 
-        # digest() 
-        """
-        derived_key = HKDF(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=None,
-            info=b'handshake data',
-        ).derive(shared_key)
+    def get_key(self):
+        if self.cipher == 'AES' or self.cipher == 'ChaCha20':
+            self.key = self.derive_shared_key(hashes.SHA256(), 32, None, b'handshake data')
+        elif self.cipher == '3DES':
+            self.key = self.derive_shared_key(hashes.SHA256(), 24, None, b'handshake data')
         
-        private_key_2 = parameters.generate_private_key()
-        peer_public_key_2 = parameters.generate_private_key().public_key()
-        shared_key_2 = private_key_2.exchange(peer_public_key_2)
-        derived_key_2 = HKDF(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=None,
-            info=b'handshake data',
-        ).derive(shared_key_2) """
+    def derive_shared_key(self, algorithm, length, salt, info):
+        # utilizar PBKDF2HMAC talvez seja mais seguro
+        derived_key = HKDF(
+            algorithm=algorithm,
+            length=length,
+            salt=salt,
+            info=info,
+        ).derive(self.shared_key)
+        
+        return derived_key
+    
+    def get_mode(self):
+        pass
+    
+    def get_cipher(self):
+        pass
         
 def main():
     print("|--------------------------------------|")

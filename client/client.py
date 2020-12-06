@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 logger = logging.getLogger('root')
 FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
@@ -37,13 +38,32 @@ class Client():
         
         # derivar a chave partilhada de acordo com cifra utilizada
         self.get_key()
-        print(len(self.key))
         
         # inicializar o modo
         self.get_mode()
         
+        # inicializar a cifra
+        self.get_algorithm()
         self.get_cipher()
         
+        # encriptador
+        self.get_encryptor()
+        
+        cifra = self.encryptor.update(b"a secret message") + self.encryptor.finalize()
+        print(cifra)
+        
+        # decriptador
+        self.get_decryptor()
+        
+        message = self.decryptor.update(cifra) + self.decryptor.finalize()
+        print(message)
+        
+        # GCM(iv)
+        # associated_data = autor
+        # encryptor.authenticate_additional_data(associated_data)
+        # encryptor.tag
+        # GCM(iv, tag)
+        # decryptor.authenticate_additional_data(associated_data)        
         
     def get_protocols_from_server(self):
         req_protocols = requests.get(f'{SERVER_URL}/api/protocols')
@@ -58,10 +78,12 @@ class Client():
     
     def choose_protocol(self):
         ret = { k: op[random.randint(0, len(op)-1)] for k, op in self.server_protocols.items() }
-        self.cipher = ret['ciphers']        
-        self.mode = ret['modes']
-        self.digest = ret['digests']
-        logger.info(f'Protocols chosen:\n\tCipher: {ret["ciphers"]}\n\tMode: {ret["modes"]}\n\tDigest: {ret["digests"]}')
+        self.chosen_cipher = ret['ciphers']
+        self.chosen_cipher = 'AES'
+        self.chosen_mode = ret['modes']
+        self.chosen_mode = 'CBC'
+        self.chosen_digest = ret['digests']
+        logger.info(f'Protocols chosen:\n\tCipher: {self.chosen_cipher}\n\tMode: {self.chosen_mode}\n\tDigest: {self.chosen_digest}')
         return ret
 
     def send_to_server(self, uri ,msg, bytes_=False):
@@ -99,9 +121,9 @@ class Client():
         # logger.debug(f'chave partilhada: {self.shared_key}')
         
     def get_key(self):
-        if self.cipher == 'AES' or self.cipher == 'ChaCha20':
+        if self.chosen_cipher == 'AES' or self.chosen_cipher == 'ChaCha20':
             self.key = self.derive_shared_key(hashes.SHA256(), 32, None, b'handshake data')
-        elif self.cipher == '3DES':
+        elif self.chosen_cipher == '3DES':
             self.key = self.derive_shared_key(hashes.SHA256(), 24, None, b'handshake data')
         
     def derive_shared_key(self, algorithm, length, salt, info):
@@ -115,11 +137,43 @@ class Client():
         
         return derived_key
     
-    def get_mode(self):
-        pass
+    def get_iv(self, bytes_=16):
+        self.iv = os.urandom(bytes_)
     
+    def get_mode(self, tag=None):
+        if self.chosen_cipher == 'ChaCha20':
+            return
+        if self.chosen_mode == 'CBC':
+            self.get_iv()
+            self.mode = modes.CBC(self.iv)
+        elif self.chosen_mode == 'OFB':
+            self.get_iv()
+            self.mode = modes.OFB(self.iv)
+        elif self.chosen_mode == 'CFB':
+            self.get_iv()
+            self.mode = modes.CFB(self.iv)
+        elif self.chosen_mode == 'GCM':
+            self.get_iv(12)
+            self.mode = modes.GCM(self.iv, tag)
+    
+    def get_algorithm(self):
+        if self.chosen_cipher == 'AES':
+            self.algorithm = algorithms.AES(self.key)
+        elif self.chosen_cipher == 'ChaCha20':
+            self.nonce = os.urandom(16)
+            self.algorithm = algorithms.ChaCha20(self.key, self.nonce)
+        elif self.chosen_cipher == '3DES':
+            self.algorithm = algorithms.TripleDES(self.key)
+            
     def get_cipher(self):
-        pass
+        self.cipher = Cipher(self.algorithm, self.mode, default_backend())
+        
+    def get_encryptor(self):
+        self.encryptor = self.cipher.encryptor()
+        
+    def get_decryptor(self):
+        self.decryptor = self.cipher.decryptor()
+        
         
 def main():
     print("|--------------------------------------|")

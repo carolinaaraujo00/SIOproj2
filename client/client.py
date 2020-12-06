@@ -7,6 +7,10 @@ import subprocess
 import time
 import sys
 
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import dh
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
 logger = logging.getLogger('root')
 FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
 logging.basicConfig(format=FORMAT)
@@ -14,6 +18,46 @@ logger.setLevel(logging.INFO)
 
 SERVER_URL = 'http://127.0.0.1:8080'
 
+SIMETRIC_CIPHERS = ['AES', 'ChaCha20', '3DES']
+MODES = ['CBC', 'OFB', 'CFB', 'GCM']
+ASYMMETRIC = ['RSA', 'EC']
+
+class Client():
+    def __init__(self):
+        self.private_key = None
+        self.public_key = None
+        self.shared_key = None
+        
+    def dhe(self):
+        parameters = dh.generate_parameters(generator=2, key_size=2048)
+        self.private_key = parameters.generate_private_key()
+        
+        # esta chave tem de ser enviada para o servido
+        self.public_key = self.private_key.public_key()
+        
+        # depois de receber a chave privada do servidor
+        peer_public_key = 0 # tem de receber a info do servidor
+        
+        self.shared_key = self.private_key.exchange(peer_public_key)
+        
+        # criptograma - cifra simetrica 
+        # digest()
+        derived_key = HKDF(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=None,
+            info=b'handshake data',
+        ).derive(shared_key)
+        
+        private_key_2 = parameters.generate_private_key()
+        peer_public_key_2 = parameters.generate_private_key().public_key()
+        shared_key_2 = private_key_2.exchange(peer_public_key_2)
+        derived_key_2 = HKDF(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=None,
+            info=b'handshake data',
+        ).derive(shared_key_2)
 def main():
     print("|--------------------------------------|")
     print("|         SECURE MEDIA CLIENT          |")
@@ -23,13 +67,19 @@ def main():
     print("Contacting Server")
     
     # TODO: Secure the session
+    req_protocols = requests.get(f'{SERVER_URL}/api/protocols')
+    if req_protocols.status_code == 200:
+        print("Got Protocols List")
 
+    
+    protocols_avail = req_protocols.json()
+    print("protocols: " + str(protocols_avail['symmetric_ciphers']))
+    
     req = requests.get(f'{SERVER_URL}/api/list')
     if req.status_code == 200:
         print("Got Server List")
-
+        
     media_list = req.json()
-
 
     # Present a simple selection menu    
     idx = 0

@@ -27,8 +27,22 @@ CATALOG = { '898a08080d1840793122b7e118b27a95d117ebce':
 CATALOG_BASE = 'catalog'
 CHUNK_SIZE = 1024 * 4
 
+SYMMETRIC_CIPHERS = ['AES', 'ChaCha20', '3DES']
+MODES = ['CBC', 'OFB', 'CFB', 'GCM']
+ASYMMETRIC_CIPHERS = ['RSA', 'EC']
+
 class MediaServer(resource.Resource):
     isLeaf = True
+    
+    def do_get_protocols(self, request):
+        logger.debug(f'Client asked for protocols')
+        return json.dumps(
+            {
+                'symmetric_ciphers': SYMMETRIC_CIPHERS, 
+                'modes': MODES, 
+                'asymmetric_ciphers': ASYMMETRIC_CIPHERS
+            },indent=4
+        ).encode('latin')
 
     # Send the list of media files to clients
     def do_list(self, request):
@@ -134,6 +148,7 @@ class MediaServer(resource.Resource):
 
             elif request.path == b'/api/download':
                 return self.do_download(request)
+
             else:
                 request.responseHeaders.addRawHeader(b"content-type", b'text/plain')
                 return b'Methods: /api/protocols /api/list /api/download'

@@ -6,6 +6,13 @@ import os
 import subprocess
 import time
 import sys
+import random
+
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import dh
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
 
 logger = logging.getLogger('root')
 FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
@@ -14,6 +21,91 @@ logger.setLevel(logging.INFO)
 
 SERVER_URL = 'http://127.0.0.1:8080'
 
+CIPHERS = ['AES', 'ChaCha20', '3DES']
+MODES = ['CBC', 'OFB', 'CFB', 'GCM']
+DIGEST = ['SHA256', 'SHA512', 'SHA1', 'MD5']
+
+class Client():
+    def __init__(self):
+        self.server_protocols = self.get_protocols_from_server()
+        self.chosen_protocols = self.choose_protocol()
+        
+        # enviar para o servidor os protocolos escolhidos
+        self.send_to_server(f'{SERVER_URL}/api/protocol_choice', self.chosen_protocols)
+        
+        self.dhe() # criar a chave publica dh para enviar ao servidor
+        
+        
+    def get_protocols_from_server(self):
+        req_protocols = requests.get(f'{SERVER_URL}/api/protocols')
+        if req_protocols.status_code == 200:
+            logger.info('Got Protocols List')
+
+        protocols_avail = req_protocols.json()
+        # print("\nAvailable protocols in the server:\n   Ciphers: " + str(protocols_avail['ciphers'])+"\n   Modes: " + str(protocols_avail['modes']) + "\n   Digests: " + str(protocols_avail['digests']) +"\n" )
+        logger.info(f'Available protocols in the server:\n\tCiphers: {protocols_avail["ciphers"]}\n\tModes: {protocols_avail["modes"]}\n\tDigests: {protocols_avail["digests"]}')
+
+        return protocols_avail
+    
+    def choose_protocol(self):
+        ret = { k: op[random.randint(0, len(op)-1)] for k, op in self.server_protocols.items() }
+        logger.info(f'Protocols chosen:\n\tCipher: {ret["ciphers"]}\n\tMode: {ret["modes"]}\n\tDigest: {ret["digests"]}')
+        return ret
+
+    def send_to_server(self, uri ,msg, bytes_=False):
+        if bytes_:
+            return requests.post(uri, data = msg)
+        return requests.post(uri, data = json.dumps(msg, indent=4).encode('latin'))
+        
+    def dhe(self):
+        p = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF
+        g = 2
+
+        params_numbers = dh.DHParameterNumbers(p,g)
+        parameters = params_numbers.parameters(default_backend())
+        
+        # parameters = dh.generate_parameters(generator=2, key_size=1024, backend=default_backend())
+        private_key = parameters.generate_private_key()
+        public_key = private_key.public_key()
+        
+        data = public_key.public_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+        # enviar chave publica dh para o servidor        
+        request = self.send_to_server(f'{SERVER_URL}/api/dh_client_public_key', data, True)
+        
+        req = requests.get(f'{SERVER_URL}/api/get_public_key_dh')
+        chunk = req.json()
+        server_public_key = binascii.a2b_base64(chunk.encode('latin'))
+
+        server_public_key = serialization.load_der_public_key(server_public_key, backend=default_backend())
+        
+        self.shared_key = private_key.exchange(server_public_key)
+        print(self.shared_key)
+        
+        # logger.debug(f'chave partilhada: {self.shared_key}')
+        
+        # criptograma - cifra simetrica 
+        # digest() 
+        """
+        derived_key = HKDF(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=None,
+            info=b'handshake data',
+        ).derive(shared_key)
+        
+        private_key_2 = parameters.generate_private_key()
+        peer_public_key_2 = parameters.generate_private_key().public_key()
+        shared_key_2 = private_key_2.exchange(peer_public_key_2)
+        derived_key_2 = HKDF(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=None,
+            info=b'handshake data',
+        ).derive(shared_key_2) """
+        
 def main():
     print("|--------------------------------------|")
     print("|         SECURE MEDIA CLIENT          |")
@@ -27,9 +119,8 @@ def main():
     req = requests.get(f'{SERVER_URL}/api/list')
     if req.status_code == 200:
         print("Got Server List")
-
+        
     media_list = req.json()
-
 
     # Present a simple selection menu    
     idx = 0
@@ -37,6 +128,7 @@ def main():
     for item in media_list:
         print(f'{idx} - {media_list[idx]["name"]}')
     print("----")
+
 
     while True:
         selection = input("Select a media file number (q to quit): ")
@@ -74,8 +166,9 @@ def main():
             proc.stdin.write(data)
         except:
             break
-
+        
 if __name__ == '__main__':
-    while True:
-        main()
-        time.sleep(1)
+    client = Client()
+    # while True:
+    #     main()
+    #     time.sleep(1)

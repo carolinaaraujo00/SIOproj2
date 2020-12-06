@@ -8,6 +8,12 @@ import json
 import os
 import math
 
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import dh
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
+
 logger = logging.getLogger('root')
 FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
 logging.basicConfig(format=FORMAT)
@@ -27,8 +33,53 @@ CATALOG = { '898a08080d1840793122b7e118b27a95d117ebce':
 CATALOG_BASE = 'catalog'
 CHUNK_SIZE = 1024 * 4
 
+CIPHERS = ['AES', 'ChaCha20', '3DES']
+MODES = ['CBC', 'OFB', 'CFB', 'GCM']
+DIGEST = ['SHA256', 'SHA512', 'SHA1', 'MD5']
+
 class MediaServer(resource.Resource):
     isLeaf = True
+    def __init__(self):
+        self.client_cipher = None
+        self.client_mode = None
+        self.client_digest = None
+        self.private_key = None
+        self.public_key = None
+    
+    def do_get_protocols(self, request):
+        logger.debug(f'Client asked for protocols')
+        return json.dumps(
+            {
+                'ciphers': CIPHERS, 
+                'modes': MODES, 
+                'digests': DIGEST
+            },indent=4
+        ).encode('latin')
+        
+    def dh_public_key(self, request):
+        # colocar key_size a 2048
+        p = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF
+        g = 2
+
+        params_numbers = dh.DHParameterNumbers(p,g)
+        parameters = params_numbers.parameters(default_backend())
+        
+        # parameters = dh.generate_parameters(generator=2, key_size=1024, backend=default_backend())
+        private_key = parameters.generate_private_key()
+        
+        data = request.content.getvalue()
+        
+        client_public_key = serialization.load_der_public_key(data, backend=default_backend())
+        
+        self.public_key_dh = private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+        
+        # chave comum a servidor e cliente
+        self.shared_key = private_key.exchange(client_public_key)
+        
+        logger.debug(f'chave partilhada: {self.shared_key}')
 
     # Send the list of media files to clients
     def do_list(self, request):
@@ -117,7 +168,16 @@ class MediaServer(resource.Resource):
         # File was not open?
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         return json.dumps({'error': 'unknown'}, indent=4).encode('latin')
+    
+    def client_protocols(self, request):
+        data = request.content.getvalue()
+        data = json.loads(data)
 
+        self.client_cipher = data['ciphers']
+        self.client_mode = data['modes']
+        self.client_digest = data['digests']
+        logger.info(f'Client protocols: Cipher:{self.client_cipher}; Mode:{self.client_mode}; Digest:{self.client_digest}')
+        
     # Handle a GET request
     def render_GET(self, request):
         logger.debug(f'Received request for {request.uri}')
@@ -134,6 +194,10 @@ class MediaServer(resource.Resource):
 
             elif request.path == b'/api/download':
                 return self.do_download(request)
+            elif request.path == b'/api/get_public_key_dh':
+                request.responseHeaders.addRawHeader(b"content-type", b'application/json')
+                return json.dumps(binascii.b2a_base64(self.public_key_dh).decode('latin').strip(), indent=4).encode('latin')
+
             else:
                 request.responseHeaders.addRawHeader(b"content-type", b'text/plain')
                 return b'Methods: /api/protocols /api/list /api/download'
@@ -147,8 +211,16 @@ class MediaServer(resource.Resource):
     # Handle a POST request
     def render_POST(self, request):
         logger.debug(f'Received POST for {request.uri}')
-        request.setResponseCode(501)
-        return b''
+        try: 
+            if request.path == b'/api/protocol_choice':
+                self.client_protocols(request)
+            elif request.path == b'/api/dh_client_public_key':
+                self.dh_public_key(request)
+        
+        except Exception as e:
+            logger.exception(e)
+            request.setResponseCode(501)
+            return b''
 
 
 print("Server started")

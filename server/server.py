@@ -27,20 +27,24 @@ CATALOG = { '898a08080d1840793122b7e118b27a95d117ebce':
 CATALOG_BASE = 'catalog'
 CHUNK_SIZE = 1024 * 4
 
-SYMMETRIC_CIPHERS = ['AES', 'ChaCha20', '3DES']
+CIPHERS = ['AES', 'ChaCha20', '3DES']
 MODES = ['CBC', 'OFB', 'CFB', 'GCM']
-ASYMMETRIC_CIPHERS = ['RSA', 'EC']
+DIGEST = ['SHA256', 'SHA512', 'SHA1', 'MD5']
 
 class MediaServer(resource.Resource):
     isLeaf = True
+    def __init__(self):
+        self.client_cipher = None
+        self.client_mode = None
+        self.client_digest = None
     
     def do_get_protocols(self, request):
         logger.debug(f'Client asked for protocols')
         return json.dumps(
             {
-                'symmetric_ciphers': SYMMETRIC_CIPHERS, 
+                'ciphers': CIPHERS, 
                 'modes': MODES, 
-                'asymmetric_ciphers': ASYMMETRIC_CIPHERS
+                'digests': DIGEST
             },indent=4
         ).encode('latin')
 
@@ -131,7 +135,16 @@ class MediaServer(resource.Resource):
         # File was not open?
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         return json.dumps({'error': 'unknown'}, indent=4).encode('latin')
+    
+    def client_protocols(self, request):
+        data = request.content.getvalue()
+        data = json.loads(data)
 
+        self.client_cipher = data['ciphers']
+        self.client_mode = data['modes']
+        self.client_digest = data['digests']
+        logger.info(f'Client protocols: {self.client_cipher} {self.client_mode} {self.client_digest}')
+        
     # Handle a GET request
     def render_GET(self, request):
         logger.debug(f'Received request for {request.uri}')
@@ -162,8 +175,14 @@ class MediaServer(resource.Resource):
     # Handle a POST request
     def render_POST(self, request):
         logger.debug(f'Received POST for {request.uri}')
-        request.setResponseCode(501)
-        return b''
+        try: 
+            if request.path == b'/api/protocol_choice':
+                self.client_protocols(request)
+        
+        except Exception as e:
+            logger.exception(e)
+            request.setResponseCode(501)
+            return b''
 
 
 print("Server started")

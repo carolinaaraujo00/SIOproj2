@@ -71,7 +71,7 @@ def main():
     if req_protocols.status_code == 200:
         print("Got Protocols List")
 
-    
+    # o orlando é merda
     protocols_avail = req_protocols.json()
     print("protocols: " + str(protocols_avail['symmetric_ciphers']))
     

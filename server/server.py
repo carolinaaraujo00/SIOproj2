@@ -174,17 +174,17 @@ class MediaServer(resource.Resource):
     def get_decryptor(self):
         self.decryptor = self.cipher.decryptor()
         
+    def block_size(self):
+        if self.client_algorithm == '3DES':
+            return 8
+        return 16
+        
     def get_decryptor_w_iv(self, iv):
         self.iv = iv
         self.get_mode(iv=True)
         self.get_algorithm()
         self.get_cipher()
         self.get_decryptor()
-        
-    def block_size(self):
-        if self.client_algorithm == '3DES':
-            return 8
-        return 16
         
     def decrypt_message(self, msg, iv=None):
         if iv:
@@ -209,12 +209,40 @@ class MediaServer(resource.Resource):
         text = json.loads(text)
         return text
     
+    def encrypt_message(self, msg):
+        data = json.dumps(msg)
+        self.get_mode()
+        self.get_algorithm()
+        self.get_cipher()
+        self.get_encryptor()
+        blocksize = self.block_size()
+
+        cripto = b''
+        while True:
+            portion = data[:blocksize]
+            if len(portion) != blocksize:
+                portion = str.encode(portion) + bytes([blocksize - len(portion)] * (blocksize - len(portion)))
+                cripto += self.encryptor.update(portion) + self.encryptor.finalize()
+                break
+            
+            cripto += self.encryptor.update(str.encode(portion))
+            data = data[blocksize:]
+        
+        return cripto
+    
     def msg_received(self, request):
         data = request.content.getvalue()
         data = json.loads(data)
         
         if data['type'] == 'msg':
-            self.decrypt_message(data['msg'], data['iv'])
+            text = self.decrypt_message(data['msg'], data['iv'])
+            logger.info(f'Mensagem recebida: {text}')
+            msg = {"msg" : "A mensagem foi recebida brow."}
+            logger.info(f'A enviar resposta para cliente: {msg}')
+            cripto = self.encrypt_message(msg)
+            request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+            return json.dumps({"msg" : binascii.b2a_base64(cripto).decode('latin').strip(),
+                               "iv" : binascii.b2a_base64(self.iv).decode('latin').strip()}).encode('latin')
     
     
     
@@ -362,7 +390,7 @@ class MediaServer(resource.Resource):
             elif request.path == b'/api/dh_client_public_key':
                 self.dh_public_key(request)
             elif request.path == b'/api/msg':
-                self.msg_received(request)
+                return self.msg_received(request)
         
         except Exception as e:
             logger.exception(e)

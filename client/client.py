@@ -40,9 +40,11 @@ class Client():
         # derivar a chave partilhada de acordo com cifra utilizada
         self.get_key()
         
-        self.send_msg("msg", {"carolina" : "ola orlando espero que esteja tudo bem obrigada por teres feito o trabalho todo", 
+        response = self.send_msg("msg", {"carolina" : "ola orlando espero que esteja tudo bem obrigada por teres feito o trabalho todo", 
                               "orlando" : "ser ou n ser eis a questao"})
         
+        text = self.decrypt_message(response['msg'], response['iv'])
+        logger.info(f'Resposta recebida do servidor: {text}')
         # GCM(iv)
         # associated_data = autor
         # encryptor.authenticate_additional_data(associated_data)
@@ -56,7 +58,6 @@ class Client():
             logger.info('Got Protocols List')
 
         protocols_avail = req_protocols.json()
-        # print("\nAvailable protocols in the server:\n   Ciphers: " + str(protocols_avail['ciphers'])+"\n   Modes: " + str(protocols_avail['modes']) + "\n   Digests: " + str(protocols_avail['digests']) +"\n" )
         logger.info(f'Available protocols in the server:\n\Algorithms: {protocols_avail["algorithms"]}\n\tModes: {protocols_avail["modes"]}\n\tDigests: {protocols_avail["digests"]}')
 
         return protocols_avail
@@ -70,7 +71,7 @@ class Client():
         self.chosen_mode = 'CBC'
         ret['modes'] = self.chosen_mode
         self.chosen_digest = ret['digests']
-        logger.info(f'Protocols chosen:\n\Algorithm: {self.chosen_algorithm}\n\tMode: {self.chosen_mode}\n\tDigest: {self.chosen_digest}')
+        logger.info(f'Protocols chosen:\n\tAlgorithm: {self.chosen_algorithm}\n\tMode: {self.chosen_mode}\n\tDigest: {self.chosen_digest}')
         return ret
 
     def send_to_server(self, uri ,msg, bytes_=False):
@@ -103,7 +104,6 @@ class Client():
         server_public_key = serialization.load_der_public_key(server_public_key, backend=default_backend())
         
         self.shared_key = private_key.exchange(server_public_key)
-        # print(self.shared_key)
 
         logger.info('Shared Key created sucessfully')
         
@@ -164,13 +164,20 @@ class Client():
         
     def get_decryptor(self):
         self.decryptor = self.cipher.decryptor()
+    
+    def get_decryptor_w_iv(self, iv):
+        self.iv = iv
+        self.get_mode(iv=True)
+        self.get_algorithm()
+        self.get_cipher()
+        self.get_decryptor()
         
     def block_size(self):
         if self.chosen_algorithm == '3DES':
             return 8
         return 16
             
-    def encrypt(self, msg):
+    def encrypt_message(self, msg):
         data = json.dumps(msg)
         self.get_mode()
         self.get_algorithm()
@@ -190,13 +197,47 @@ class Client():
             data = data[blocksize:]
         
         return cripto
+    
+    def decrypt_message(self, msg, iv=None):
+        if iv:
+            self.get_decryptor_w_iv(binascii.a2b_base64(iv.encode('latin')))
+        
+        criptogram = binascii.a2b_base64(msg.encode('latin'))
+        block_size = self.block_size()
+        text = b''
+        last_block = criptogram[len(criptogram) - block_size :]
+        criptogram = criptogram[:-block_size]
+        
+        while True:
+            portion = criptogram[:block_size]
+            if len(portion) == 0:
+                dec = self.decryptor.update(last_block) + self.decryptor.finalize()
+                text += dec[:block_size - dec[-1]]
+                break
+            
+            text += self.decryptor.update(portion)
+            criptogram = criptogram[block_size:]
+            
+        text = json.loads(text)
+        return text
         
     def send_msg(self, type_, msg):
-        criptogram = self.encrypt(msg)
-        print(criptogram)
-        self.send_to_server(f'{SERVER_URL}/api/msg',
+        logger.info(f'A enviar mensagem para servidor: {msg}')
+        criptogram = self.encrypt_message(msg)
+        req = self.send_to_server(f'{SERVER_URL}/api/msg',
                             {"type" : type_,"msg": binascii.b2a_base64(criptogram).decode('latin').strip(), "iv": binascii.b2a_base64(self.iv).decode('latin').strip()})
         
+        if req.status_code == 200:
+            return req.json()
+        else:
+            logger.error('Não houve json de resposta por parte do servidor')
+            
+            
+            
+            
+            
+            
+            
         
 def main():
     print("|--------------------------------------|")

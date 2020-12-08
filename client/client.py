@@ -22,7 +22,7 @@ logger.setLevel(logging.INFO)
 
 SERVER_URL = 'http://127.0.0.1:8080'
 
-CIPHERS = ['AES', 'ChaCha20', '3DES']
+ALGORITHMS = ['AES', 'ChaCha20', '3DES']
 MODES = ['CBC', 'OFB', 'CFB', 'GCM']
 DIGEST = ['SHA256', 'SHA512', 'SHA1', 'MD5']
 
@@ -34,29 +34,14 @@ class Client():
         # enviar para o servidor os protocolos escolhidos
         self.send_to_server(f'{SERVER_URL}/api/protocol_choice', self.chosen_protocols)
         
-        self.dhe() # criar a chave publica dh para enviar ao servidor
+        # criar a chave publica dh para enviar ao servidor
+        self.dhe() 
         
         # derivar a chave partilhada de acordo com cifra utilizada
         self.get_key()
         
-        # inicializar o modo
-        self.get_mode()
-        
-        # inicializar a cifra
-        self.get_algorithm()
-        self.get_cipher()
-        
-        # encriptador
-        self.get_encryptor()
-        
-        cifra = self.encryptor.update(b"a secret message") + self.encryptor.finalize()
-        print(cifra)
-        
-        # decriptador
-        self.get_decryptor()
-        
-        message = self.decryptor.update(cifra) + self.decryptor.finalize()
-        print(message)
+        self.send_msg("msg", {"carolina" : "ola orlando espero que esteja tudo bem obrigada por teres feito o trabalho todo", 
+                              "orlando" : "ser ou n ser eis a questao"})
         
         # GCM(iv)
         # associated_data = autor
@@ -72,18 +57,20 @@ class Client():
 
         protocols_avail = req_protocols.json()
         # print("\nAvailable protocols in the server:\n   Ciphers: " + str(protocols_avail['ciphers'])+"\n   Modes: " + str(protocols_avail['modes']) + "\n   Digests: " + str(protocols_avail['digests']) +"\n" )
-        logger.info(f'Available protocols in the server:\n\tCiphers: {protocols_avail["ciphers"]}\n\tModes: {protocols_avail["modes"]}\n\tDigests: {protocols_avail["digests"]}')
+        logger.info(f'Available protocols in the server:\n\Algorithms: {protocols_avail["algorithms"]}\n\tModes: {protocols_avail["modes"]}\n\tDigests: {protocols_avail["digests"]}')
 
         return protocols_avail
     
     def choose_protocol(self):
         ret = { k: op[random.randint(0, len(op)-1)] for k, op in self.server_protocols.items() }
-        self.chosen_cipher = ret['ciphers']
-        self.chosen_cipher = 'AES'
+        self.chosen_algorithm = ret['algorithms']
+        self.chosen_algorithm = 'AES'
+        ret['algorithms'] = self.chosen_algorithm
         self.chosen_mode = ret['modes']
         self.chosen_mode = 'CBC'
+        ret['modes'] = self.chosen_mode
         self.chosen_digest = ret['digests']
-        logger.info(f'Protocols chosen:\n\tCipher: {self.chosen_cipher}\n\tMode: {self.chosen_mode}\n\tDigest: {self.chosen_digest}')
+        logger.info(f'Protocols chosen:\n\Algorithm: {self.chosen_algorithm}\n\tMode: {self.chosen_mode}\n\tDigest: {self.chosen_digest}')
         return ret
 
     def send_to_server(self, uri ,msg, bytes_=False):
@@ -118,12 +105,12 @@ class Client():
         self.shared_key = private_key.exchange(server_public_key)
         # print(self.shared_key)
 
-        # logger.debug(f'chave partilhada: {self.shared_key}')
+        logger.info('Shared Key created sucessfully')
         
     def get_key(self):
-        if self.chosen_cipher == 'AES' or self.chosen_cipher == 'ChaCha20':
+        if self.chosen_algorithm == 'AES' or self.chosen_algorithm == 'ChaCha20':
             self.key = self.derive_shared_key(hashes.SHA256(), 32, None, b'handshake data')
-        elif self.chosen_cipher == '3DES':
+        elif self.chosen_algorithm == '3DES':
             self.key = self.derive_shared_key(hashes.SHA256(), 24, None, b'handshake data')
         
     def derive_shared_key(self, algorithm, length, salt, info):
@@ -140,32 +127,36 @@ class Client():
     def get_iv(self, bytes_=16):
         self.iv = os.urandom(bytes_)
     
-    def get_mode(self, tag=None):
-        if self.chosen_cipher == 'ChaCha20':
-            return
+    def get_mode(self, iv=False, tag=None):
+        if self.chosen_algorithm == 'ChaCha20':
+            self.mode = None
+        if not iv:
+            if self.chosen_algorithm == 'AES':
+                self.get_iv()
+            elif self.chosen_algorithm == '3DES':
+                self.get_iv(8)
+                
         if self.chosen_mode == 'CBC':
-            self.get_iv()
             self.mode = modes.CBC(self.iv)
         elif self.chosen_mode == 'OFB':
-            self.get_iv()
             self.mode = modes.OFB(self.iv)
         elif self.chosen_mode == 'CFB':
-            self.get_iv()
             self.mode = modes.CFB(self.iv)
         elif self.chosen_mode == 'GCM':
-            self.get_iv(12)
             self.mode = modes.GCM(self.iv, tag)
     
     def get_algorithm(self):
-        if self.chosen_cipher == 'AES':
+        if self.chosen_algorithm == 'AES':
             self.algorithm = algorithms.AES(self.key)
-        elif self.chosen_cipher == 'ChaCha20':
+        elif self.chosen_algorithm == 'ChaCha20':
             self.nonce = os.urandom(16)
             self.algorithm = algorithms.ChaCha20(self.key, self.nonce)
-        elif self.chosen_cipher == '3DES':
+        elif self.chosen_algorithm == '3DES':
             self.algorithm = algorithms.TripleDES(self.key)
             
     def get_cipher(self):
+        if self.chosen_algorithm == 'ChaCha20':
+            self.cipher = Cip
         self.cipher = Cipher(self.algorithm, self.mode, default_backend())
         
     def get_encryptor(self):
@@ -173,6 +164,38 @@ class Client():
         
     def get_decryptor(self):
         self.decryptor = self.cipher.decryptor()
+        
+    def block_size(self):
+        if self.chosen_algorithm == '3DES':
+            return 8
+        return 16
+            
+    def encrypt(self, msg):
+        data = json.dumps(msg)
+        self.get_mode()
+        self.get_algorithm()
+        self.get_cipher()
+        self.get_encryptor()
+        blocksize = self.block_size()
+
+        cripto = b''
+        while True:
+            portion = data[:blocksize]
+            if len(portion) != blocksize:
+                portion = str.encode(portion) + bytes([blocksize - len(portion)] * (blocksize - len(portion)))
+                cripto += self.encryptor.update(portion) + self.encryptor.finalize()
+                break
+            
+            cripto += self.encryptor.update(str.encode(portion))
+            data = data[blocksize:]
+        
+        return cripto
+        
+    def send_msg(self, type_, msg):
+        criptogram = self.encrypt(msg)
+        print(criptogram)
+        self.send_to_server(f'{SERVER_URL}/api/msg',
+                            {"type" : type_,"msg": binascii.b2a_base64(criptogram).decode('latin').strip(), "iv": binascii.b2a_base64(self.iv).decode('latin').strip()})
         
         
 def main():

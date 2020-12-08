@@ -45,6 +45,7 @@ class Client():
         
         text = self.decrypt_message(response['msg'], response['iv'])
         logger.info(f'Resposta recebida do servidor: {text}')
+        
         # GCM(iv)
         # associated_data = autor
         # encryptor.authenticate_additional_data(associated_data)
@@ -63,17 +64,38 @@ class Client():
         return protocols_avail
     
     def choose_protocol(self):
-        ret = { k: op[random.randint(0, len(op)-1)] for k, op in self.server_protocols.items() }
-        self.chosen_algorithm = ret['algorithms']
-        self.chosen_algorithm = 'AES'
-        ret['algorithms'] = self.chosen_algorithm
-        self.chosen_mode = ret['modes']
-        self.chosen_mode = 'CBC'
-        ret['modes'] = self.chosen_mode
-        self.chosen_digest = ret['digests']
+        matching_algorithms = [alg for alg in self.server_protocols['algorithms'] if alg in ALGORITHMS]
+        matching_modes = [mode for mode in self.server_protocols['modes'] if mode in MODES]
+        matching_digests = [dig for dig in self.server_protocols['digests'] if dig in DIGEST]
+        
+        self.chosen_algorithm = self.choose_cycle('What algorithm would you like to use? ', matching_algorithms)
+        # self.chosen_algorithm = 'AES'
+        # ret['algorithms'] = self.chosen_algorithm
+        self.chosen_mode = self.choose_cycle('What mode would you like to use? ', matching_modes)
+        # self.chosen_mode = 'CBC'
+        # ret['modes'] = self.chosen_mode
+        self.chosen_digest = self.choose_cycle('What digest would you like to use? ', matching_digests)
         logger.info(f'Protocols chosen:\n\tAlgorithm: {self.chosen_algorithm}\n\tMode: {self.chosen_mode}\n\tDigest: {self.chosen_digest}')
-        return ret
+        return {'algorithm' : self.chosen_algorithm, 'mode' : self.chosen_mode, 'digest' : self.chosen_digest}
+    
+    def choose_cycle(self, msg, list_):
+        print('###############################')
+        for i in range(len(list_)):
+            print(f'{i} -- {list_[i]}')
+        print('..............................')
+        selection = None
+        while True:
+            selection = input(msg)
 
+            if not selection.isdigit():
+                continue
+
+            selection = int(selection)
+            if 0 <= selection < len(list_):
+                break
+        print('###############################')            
+        return list_[selection]
+        
     def send_to_server(self, uri ,msg, bytes_=False):
         if bytes_:
             return requests.post(uri, data = msg)

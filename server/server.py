@@ -85,9 +85,9 @@ class MediaServer(resource.Resource):
         data = request.content.getvalue()
         data = json.loads(data)
 
-        self.client_algorithm = data['algorithms']
-        self.client_mode = data['modes']
-        self.client_digest = data['digests']
+        self.client_algorithm = data['algorithm']
+        self.client_mode = data['mode']
+        self.client_digest = data['digest']
         logger.info(f'Client protocols: Cipher:{self.client_algorithm}; Mode:{self.client_mode}; Digest:{self.client_digest}')
         
     def dh_public_key(self, request):

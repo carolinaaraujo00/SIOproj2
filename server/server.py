@@ -46,6 +46,7 @@ class MediaServer(resource.Resource):
         self.client_digest = None
         self.private_key = None
         self.public_key = None
+        self.tag = None
         
         
     def get_communication_assets(self):
@@ -140,7 +141,7 @@ class MediaServer(resource.Resource):
     def get_iv(self, bytes_=16):
         self.iv = os.urandom(bytes_)
     
-    def get_mode(self, iv = False, tag=None):
+    def get_mode(self, iv=False):
         if self.client_algorithm == 'ChaCha20':
             return
         if not iv:
@@ -156,7 +157,7 @@ class MediaServer(resource.Resource):
         elif self.client_mode == 'CFB':
             self.mode = modes.CFB(self.iv)
         elif self.client_mode == 'GCM':
-            self.mode = modes.GCM(self.iv, tag)
+            self.mode = modes.GCM(self.iv, self.tag)
     
     def get_algorithm(self):
         if self.client_algorithm == 'AES':
@@ -188,11 +189,14 @@ class MediaServer(resource.Resource):
         self.get_cipher()
         self.get_decryptor()
         
-    def decrypt_message(self, msg, iv=None):
-        if iv:
-            self.get_decryptor_w_iv(binascii.a2b_base64(iv.encode('latin')))
+    def decrypt_message(self, data):
+        if data["tag"]:
+            self.tag = binascii.a2b_base64(data["tag"].encode('latin'))
+            
+        if data["iv"]:
+            self.get_decryptor_w_iv(binascii.a2b_base64(data["iv"].encode('latin')))
         
-        criptogram = binascii.a2b_base64(msg.encode('latin'))
+        criptogram = binascii.a2b_base64(data["msg"].encode('latin'))
         block_size = self.block_size()
         text = b''
         last_block = criptogram[len(criptogram) - block_size :]
@@ -213,6 +217,10 @@ class MediaServer(resource.Resource):
     
     def encrypt_message(self, msg):
         data = json.dumps(msg)
+
+        if self.client_mode == "GCM":
+            self.tag = None
+
         self.get_mode()
         self.get_algorithm()
         self.get_cipher()
@@ -230,21 +238,32 @@ class MediaServer(resource.Resource):
             cripto += self.encryptor.update(str.encode(portion))
             data = data[blocksize:]
         
-        return cripto
+        if self.client_mode == "GCM":
+            return cripto, self.encryptor.tag
+        
+        return cripto, ""
     
     def msg_received(self, request):
         data = request.content.getvalue()
         data = json.loads(data)
         
         if data['type'] == 'msg':
-            text = self.decrypt_message(data['msg'], data['iv'])
+            text = self.decrypt_message(data)
+
             logger.info(f'Mensagem recebida: {text}')
             msg = {"msg" : "A mensagem foi recebida brow."}
             logger.info(f'A enviar resposta para cliente: {msg}')
-            cripto = self.encrypt_message(msg)
+            cripto, tag = self.encrypt_message(msg)
+            
+            json_message = {
+                        "msg" : binascii.b2a_base64(cripto).decode('latin').strip(),
+                        "iv" : binascii.b2a_base64(self.iv).decode('latin').strip()}
+            
+            if self.client_mode == "GCM":
+                json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
+                        
             request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-            return json.dumps({"msg" : binascii.b2a_base64(cripto).decode('latin').strip(),
-                               "iv" : binascii.b2a_base64(self.iv).decode('latin').strip()}).encode('latin')
+            return json.dumps(json_message).encode('latin')
     
     
     

@@ -28,6 +28,7 @@ DIGEST = ['SHA256', 'SHA512', 'SHA1', 'MD5']
 
 class Client():
     def __init__(self):
+        self.tag = None
         self.server_protocols = self.get_protocols_from_server()
         self.chosen_protocols = self.choose_protocol()
         
@@ -43,8 +44,8 @@ class Client():
         
         response = self.send_msg("msg", {"carolina" : "ola orlando espero que esteja tudo bem obrigada por teres feito o trabalho todo", 
                               "orlando" : "ser ou n ser eis a questao"})
-        
-        text = self.decrypt_message(response['msg'], response['iv'])
+                
+        text = self.decrypt_message(response)
         logger.info(f'Resposta recebida do servidor: {text}')
         
         # GCM(iv)
@@ -147,7 +148,7 @@ class Client():
     def get_iv(self, bytes_=16):
         self.iv = os.urandom(bytes_)
     
-    def get_mode(self, iv=False, tag=None):
+    def get_mode(self, iv=False):
         if self.chosen_algorithm == 'ChaCha20':
             self.mode = None
         if not iv:
@@ -163,7 +164,7 @@ class Client():
         elif self.chosen_mode == 'CFB':
             self.mode = modes.CFB(self.iv)
         elif self.chosen_mode == 'GCM':
-            self.mode = modes.GCM(self.iv, tag)
+            self.mode = modes.GCM(self.iv, self.tag)
     
     def get_algorithm(self):
         if self.chosen_algorithm == 'AES':
@@ -176,7 +177,7 @@ class Client():
             
     def get_cipher(self):
         if self.chosen_algorithm == 'ChaCha20':
-            self.cipher = Cip
+            pass
         self.cipher = Cipher(self.algorithm, self.mode, default_backend())
         
     def get_encryptor(self):
@@ -199,6 +200,10 @@ class Client():
             
     def encrypt_message(self, msg):
         data = json.dumps(msg)
+        
+        if self.chosen_mode == "GCM":
+            self.tag = None
+        
         self.get_mode()
         self.get_algorithm()
         self.get_cipher()
@@ -215,14 +220,22 @@ class Client():
             
             cripto += self.encryptor.update(str.encode(portion))
             data = data[blocksize:]
+            
+            # se o modo for GCM
+        if self.chosen_mode == "GCM":
+            return cripto, self.encryptor.tag
         
-        return cripto
+        return cripto, ""
     
-    def decrypt_message(self, msg, iv=None):
-        if iv:
-            self.get_decryptor_w_iv(binascii.a2b_base64(iv.encode('latin')))
+    def decrypt_message(self, data):
+        print(data)
+        if data["tag"]:
+            self.tag = binascii.a2b_base64(data["tag"].encode('latin'))
+            print(self.tag)
+        if data["iv"]:
+            self.get_decryptor_w_iv(binascii.a2b_base64(data["iv"].encode('latin')))
         
-        criptogram = binascii.a2b_base64(msg.encode('latin'))
+        criptogram = binascii.a2b_base64(data["msg"].encode('latin'))
         block_size = self.block_size()
         text = b''
         last_block = criptogram[len(criptogram) - block_size :]
@@ -243,9 +256,18 @@ class Client():
         
     def send_msg(self, type_, msg):
         logger.info(f'A enviar mensagem para servidor: {msg}')
-        criptogram = self.encrypt_message(msg)
-        req = self.send_to_server(f'{SERVER_URL}/api/msg',
-                            {"type" : type_,"msg": binascii.b2a_base64(criptogram).decode('latin').strip(), "iv": binascii.b2a_base64(self.iv).decode('latin').strip()})
+        criptogram, tag = self.encrypt_message(msg)
+        
+        json_message = {
+            "type" : type_,
+            "msg" : binascii.b2a_base64(criptogram).decode('latin').strip(),
+            "iv" : binascii.b2a_base64(self.iv).decode('latin').strip()
+        }
+        
+        if self.chosen_mode == "GCM":
+            json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
+                    
+        req = self.send_to_server(f'{SERVER_URL}/api/msg', json_message)
         
         if req.status_code == 200:
             return req.json()

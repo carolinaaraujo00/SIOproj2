@@ -117,6 +117,8 @@ class MediaServer(resource.Resource):
         
         # inicializar o processo de criar encriptador e decriptador
         self.get_key()
+        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+        return json.dumps({"key" : binascii.b2a_base64(self.public_key_dh).decode('latin').strip()}, indent=4).encode('latin')
         
     def get_key(self):
         if self.client_algorithm == 'AES' or self.client_algorithm == 'ChaCha20':
@@ -388,7 +390,7 @@ class MediaServer(resource.Resource):
             if request.path == b'/api/protocol_choice':
                 self.client_protocols(request)
             elif request.path == b'/api/dh_client_public_key':
-                self.dh_public_key(request)
+                return self.dh_public_key(request)
             elif request.path == b'/api/msg':
                 return self.msg_received(request)
         

@@ -38,6 +38,7 @@ class Client():
         self.dhe() 
         
         # derivar a chave partilhada de acordo com cifra utilizada
+        
         self.get_key()
         
         response = self.send_msg("msg", {"carolina" : "ola orlando espero que esteja tudo bem obrigada por teres feito o trabalho todo", 
@@ -118,11 +119,8 @@ class Client():
         )
         # enviar chave publica dh para o servidor        
         request = self.send_to_server(f'{SERVER_URL}/api/dh_client_public_key', data, True)
+        server_public_key = binascii.a2b_base64(request.json()['key'].encode('latin'))
         
-        req = requests.get(f'{SERVER_URL}/api/get_public_key_dh')
-        chunk = req.json()
-        server_public_key = binascii.a2b_base64(chunk.encode('latin'))
-
         server_public_key = serialization.load_der_public_key(server_public_key, backend=default_backend())
         
         self.shared_key = private_key.exchange(server_public_key)

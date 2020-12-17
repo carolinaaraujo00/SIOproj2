@@ -141,10 +141,11 @@ class MediaServer(resource.Resource):
     def get_iv(self, bytes_=16):
         self.iv = os.urandom(bytes_)
     
-    def get_mode(self, iv=False):
+    def get_mode(self, make_iv=False):
         if self.client_algorithm == 'ChaCha20':
-            return
-        if not iv:
+            self.mode = None
+            return 
+        if make_iv:
             if self.client_algorithm == 'AES':
                 self.get_iv()
             elif self.client_algorithm == '3DES':
@@ -163,14 +164,15 @@ class MediaServer(resource.Resource):
         if self.client_algorithm == 'AES':
             self.algorithm = algorithms.AES(self.key)
         elif self.client_algorithm == 'ChaCha20':
-            self.nonce = os.urandom(16)
+            if not self.nonce:
+                self.nonce = os.urandom(16)
             self.algorithm = algorithms.ChaCha20(self.key, self.nonce)
         elif self.client_algorithm == '3DES':
             self.algorithm = algorithms.TripleDES(self.key)
             
     def get_cipher(self):
-        self.cipher = Cipher(self.algorithm, self.mode, default_backend())
-        
+        self.cipher = Cipher(self.algorithm, mode=self.mode, backend=default_backend())
+
     def get_encryptor(self):
         self.encryptor = self.cipher.encryptor()
         
@@ -182,21 +184,27 @@ class MediaServer(resource.Resource):
             return 8
         return 16
         
-    def get_decryptor_w_iv(self, iv):
-        self.iv = iv
-        self.get_mode(iv=True)
+    def get_decryptor4msg(self):
+        self.get_mode()
         self.get_algorithm()
         self.get_cipher()
         self.get_decryptor()
         
     def decrypt_message(self, data):
-        if data["tag"]:
+        if "tag" in data:
             self.tag = binascii.a2b_base64(data["tag"].encode('latin'))
+        if "nonce" in data:
+            self.nonce = binascii.a2b_base64(data["nonce"].encode('latin'))
+        if "iv" in data:
+            self.iv = binascii.a2b_base64(data["iv"].encode('latin'))
             
-        if data["iv"]:
-            self.get_decryptor_w_iv(binascii.a2b_base64(data["iv"].encode('latin')))
+        self.get_decryptor4msg()
         
         criptogram = binascii.a2b_base64(data["msg"].encode('latin'))
+
+        if self.client_algorithm == "ChaCha20":
+            return self.decryptor.update(criptogram)
+
         block_size = self.block_size()
         text = b''
         last_block = criptogram[len(criptogram) - block_size :]
@@ -220,17 +228,23 @@ class MediaServer(resource.Resource):
 
         if self.client_mode == "GCM":
             self.tag = None
+            
+        if self.client_algorithm == "ChaCha20":
+            self.nonce = None
 
-        self.get_mode()
+        self.get_mode(True)
         self.get_algorithm()
         self.get_cipher()
         self.get_encryptor()
         blocksize = self.block_size()
+        
+        if self.client_algorithm == "ChaCha20":
+            return self.encryptor.update(str.encode(data)), ""
 
         cripto = b''
         while True:
             portion = data[:blocksize]
-            if len(portion) != blocksize:
+            if len(poration) != blocksize:
                 portion = str.encode(portion) + bytes([blocksize - len(portion)] * (blocksize - len(portion)))
                 cripto += self.encryptor.update(portion) + self.encryptor.finalize()
                 break
@@ -256,12 +270,17 @@ class MediaServer(resource.Resource):
             cripto, tag = self.encrypt_message(msg)
             
             json_message = {
-                        "msg" : binascii.b2a_base64(cripto).decode('latin').strip(),
-                        "iv" : binascii.b2a_base64(self.iv).decode('latin').strip()}
+                        "msg" : binascii.b2a_base64(cripto).decode('latin').strip()
+                        }
             
-            if self.client_mode == "GCM":
-                json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
-                        
+            if self.client_algorithm == "ChaCha20":
+                json_message["nonce"] = binascii.b2a_base64(self.nonce).decode('latin').strip()
+            else:
+                json_message["iv"] = binascii.b2a_base64(self.iv).decode('latin').strip()
+                    
+                if self.client_mode == "GCM":
+                    json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
+                                    
             request.responseHeaders.addRawHeader(b"content-type", b"application/json")
             return json.dumps(json_message).encode('latin')
     

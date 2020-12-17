@@ -29,6 +29,7 @@ DIGEST = ['SHA256', 'SHA512', 'SHA1', 'MD5']
 class Client():
     def __init__(self):
         self.tag = None
+        self.chosen_mode = None
         self.server_protocols = self.get_protocols_from_server()
         self.chosen_protocols = self.choose_protocol()
         
@@ -71,11 +72,10 @@ class Client():
         matching_digests = [dig for dig in self.server_protocols['digests'] if dig in DIGEST]
         
         self.chosen_algorithm = self.choose_cycle('What algorithm would you like to use? ', matching_algorithms)
-        # self.chosen_algorithm = 'AES'
-        # ret['algorithms'] = self.chosen_algorithm
-        self.chosen_mode = self.choose_cycle('What mode would you like to use? ', matching_modes)
-        # self.chosen_mode = 'CBC'
-        # ret['modes'] = self.chosen_mode
+        
+        if self.chosen_algorithm != 'ChaCha20':
+            self.chosen_mode = self.choose_cycle('What mode would you like to use? ', matching_modes)
+        
         self.chosen_digest = self.choose_cycle('What digest would you like to use? ', matching_digests)
         logger.info(f'Protocols chosen:\n\tAlgorithm: {self.chosen_algorithm}\n\tMode: {self.chosen_mode}\n\tDigest: {self.chosen_digest}')
         return {'algorithm' : self.chosen_algorithm, 'mode' : self.chosen_mode, 'digest' : self.chosen_digest}
@@ -148,10 +148,11 @@ class Client():
     def get_iv(self, bytes_=16):
         self.iv = os.urandom(bytes_)
     
-    def get_mode(self, iv=False):
+    def get_mode(self, make_iv=False):
         if self.chosen_algorithm == 'ChaCha20':
             self.mode = None
-        if not iv:
+            return
+        if make_iv:
             if self.chosen_algorithm == 'AES':
                 self.get_iv()
             elif self.chosen_algorithm == '3DES':
@@ -170,7 +171,8 @@ class Client():
         if self.chosen_algorithm == 'AES':
             self.algorithm = algorithms.AES(self.key)
         elif self.chosen_algorithm == 'ChaCha20':
-            self.nonce = os.urandom(16)
+            if not self.nonce:
+                self.nonce = os.urandom(16)
             self.algorithm = algorithms.ChaCha20(self.key, self.nonce)
         elif self.chosen_algorithm == '3DES':
             self.algorithm = algorithms.TripleDES(self.key)
@@ -186,9 +188,8 @@ class Client():
     def get_decryptor(self):
         self.decryptor = self.cipher.decryptor()
     
-    def get_decryptor_w_iv(self, iv):
-        self.iv = iv
-        self.get_mode(iv=True)
+    def get_decryptor4msg(self):
+        self.get_mode()
         self.get_algorithm()
         self.get_cipher()
         self.get_decryptor()
@@ -203,12 +204,18 @@ class Client():
         
         if self.chosen_mode == "GCM":
             self.tag = None
+            
+        if self.chosen_algorithm == "ChaCha20":
+            self.nonce = None
         
         self.get_mode()
         self.get_algorithm()
         self.get_cipher()
         self.get_encryptor()
         blocksize = self.block_size()
+        
+        if self.chosen_algorithm == "ChaCha20":
+            return self.encryptor.update(str.encode(data)), ""
 
         cripto = b''
         while True:
@@ -228,14 +235,21 @@ class Client():
         return cripto, ""
     
     def decrypt_message(self, data):
-        print(data)
-        if data["tag"]:
+        if "tag" in data:
             self.tag = binascii.a2b_base64(data["tag"].encode('latin'))
-            print(self.tag)
-        if data["iv"]:
-            self.get_decryptor_w_iv(binascii.a2b_base64(data["iv"].encode('latin')))
+        if "nonce" in data:
+            self.nonce = binascii.a2b_base64(data["nonce"].encode('latin'))
+        if "iv" in data:
+            self.iv = binascii.a2b_base64(data["iv"].encode('latin'))
+        
+        
+        self.get_decryptor4msg()     
         
         criptogram = binascii.a2b_base64(data["msg"].encode('latin'))
+
+        if self.chosen_algorithm == "ChaCha20":
+            return self.decryptor.update(criptogram)
+
         block_size = self.block_size()
         text = b''
         last_block = criptogram[len(criptogram) - block_size :]
@@ -260,12 +274,17 @@ class Client():
         
         json_message = {
             "type" : type_,
-            "msg" : binascii.b2a_base64(criptogram).decode('latin').strip(),
-            "iv" : binascii.b2a_base64(self.iv).decode('latin').strip()
+            "msg" : binascii.b2a_base64(criptogram).decode('latin').strip()
         }
         
-        if self.chosen_mode == "GCM":
-            json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
+        if self.chosen_algorithm == "ChaCha20":
+            json_message["nonce"] = binascii.b2a_base64(self.nonce).decode('latin').strip()
+        else:
+            json_message["iv"] = binascii.b2a_base64(self.iv).decode('latin').strip()
+                
+            if self.chosen_mode == "GCM":
+                json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
+                
                     
         req = self.send_to_server(f'{SERVER_URL}/api/msg', json_message)
         

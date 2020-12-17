@@ -46,7 +46,7 @@ class Client():
         response = self.send_msg("msg", {"carolina" : "ola orlando espero que esteja tudo bem obrigada por teres feito o trabalho todo", 
                               "orlando" : "ser ou n ser eis a questao"})
                 
-        text = self.decrypt_message(response)
+        text = self.msg_received(response)
         logger.info(f'Resposta recebida do servidor: {text}')
         
         # GCM(iv)
@@ -77,6 +77,10 @@ class Client():
             self.chosen_mode = self.choose_cycle('What mode would you like to use? ', matching_modes)
         
         self.chosen_digest = self.choose_cycle('What digest would you like to use? ', matching_digests)
+        
+        # TODO retirar daqui pq secalhar n é a melhor solucao
+        self.get_digest()
+        
         logger.info(f'Protocols chosen:\n\tAlgorithm: {self.chosen_algorithm}\n\tMode: {self.chosen_mode}\n\tDigest: {self.chosen_digest}')
         return {'algorithm' : self.chosen_algorithm, 'mode' : self.chosen_mode, 'digest' : self.chosen_digest}
     
@@ -187,6 +191,18 @@ class Client():
         
     def get_decryptor(self):
         self.decryptor = self.cipher.decryptor()
+        
+    def get_digest(self):
+        if self.chosen_digest == 'SHA256':
+            self.digest = hashes.Hash(hashes.SHA256())
+        elif self.chosen_digest == 'SHA512':
+            self.digest = hashes.Hash(hashes.SHA512())
+        elif self.chosen_digest == 'BLAKE2b':
+            self.digest = hashes.Hash(hashes.BLAKE2b(64))
+        elif self.chosen_digest == 'SHA3_256':
+            self.digest = hashes.Hash(hashes.SHA3_256())
+        elif self.chosen_digest == 'SHA3_512':
+            self.digest = hashes.Hash(hashes.SHA3_512())
     
     def get_decryptor4msg(self):
         self.get_mode()
@@ -232,6 +248,7 @@ class Client():
         if self.chosen_mode == "GCM":
             return cripto, self.encryptor.tag
         
+        
         return cripto, ""
     
     def decrypt_message(self, data):
@@ -272,9 +289,13 @@ class Client():
         logger.info(f'A enviar mensagem para servidor: {msg}')
         criptogram, tag = self.encrypt_message(msg)
         
+        dig = self.digest.update(criptogram) + self.digest.finalize()
+        print(criptogram, dig)
+        
         json_message = {
             "type" : type_,
-            "msg" : binascii.b2a_base64(criptogram).decode('latin').strip()
+            "msg" : binascii.b2a_base64(criptogram).decode('latin').strip(),
+            "digest" : binascii.b2a_base64(dig).decode('latin').strip()
         }
         
         if self.chosen_algorithm == "ChaCha20":
@@ -292,6 +313,12 @@ class Client():
             return req.json()
         else:
             logger.error('Não houve json de resposta por parte do servidor')
+            
+    def msg_received(self, data):
+        if data['type'] == "sucess":
+            return self.decrypt_message(response)
+        elif data['type'] == "error":
+            return data['msg']
             
             
             

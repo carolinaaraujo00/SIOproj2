@@ -36,7 +36,7 @@ CHUNK_SIZE = 1024 * 4
 
 ALGORITHMS = ['AES', 'ChaCha20', '3DES']
 MODES = ['CBC', 'OFB', 'CFB', 'GCM']
-DIGEST = ['SHA256', 'SHA512', 'SHA1', 'MD5']
+DIGEST = ['SHA256', 'SHA512', 'BLAKE2b', 'SHA3_256', 'SHA3_512']
 
 class MediaServer(resource.Resource):
     isLeaf = True
@@ -89,6 +89,10 @@ class MediaServer(resource.Resource):
         self.client_algorithm = data['algorithm']
         self.client_mode = data['mode']
         self.client_digest = data['digest']
+        
+        # TODO talvez remover digest deste metodo
+        self.get_digest()
+        
         logger.info(f'Client protocols: Cipher:{self.client_algorithm}; Mode:{self.client_mode}; Digest:{self.client_digest}')
         
     def dh_public_key(self, request):
@@ -179,6 +183,18 @@ class MediaServer(resource.Resource):
     def get_decryptor(self):
         self.decryptor = self.cipher.decryptor()
         
+    def get_digest(self):
+        if self.client_digest == 'SHA256':
+            self.digest = hashes.Hash(hashes.SHA256())
+        elif self.client_digest == 'SHA512':
+            self.digest = hashes.Hash(hashes.SHA512())
+        elif self.client_digest == 'BLAKE2b':
+            self.digest = hashes.Hash(hashes.BLAKE2b(64))
+        elif self.client_digest == 'SHA3_256':
+            self.digest = hashes.Hash(hashes.SHA3_256())
+        elif self.client_digest == 'SHA3_512':
+            self.digest = hashes.Hash(hashes.SHA3_512())
+        
     def block_size(self):
         if self.client_algorithm == '3DES':
             return 8
@@ -257,11 +273,25 @@ class MediaServer(resource.Resource):
         
         return cripto, ""
     
+    def check_integrity(self, msg, digest):
+        print(msg, digest)
+        dig = self.digest.update(msg) + self.digest.finalize()
+        if dig == digest:
+            logger.info("A mensagem chegou sem problemas :)")
+            return True
+        logger.error("A mensagem foi corrompida a meio do caminho.")
+        return False 
+
     def msg_received(self, request):
         data = request.content.getvalue()
         data = json.loads(data)
         
+        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+        
         if data['type'] == 'msg':
+            if not check_integrity(data['msg'], data['digest']):
+                return json.dumps({'type' : 'error', 'msg' : "manda essa merda de novo brow"}).encode('latin')
+
             text = self.decrypt_message(data)
 
             logger.info(f'Mensagem recebida: {text}')
@@ -269,9 +299,7 @@ class MediaServer(resource.Resource):
             logger.info(f'A enviar resposta para cliente: {msg}')
             cripto, tag = self.encrypt_message(msg)
             
-            json_message = {
-                        "msg" : binascii.b2a_base64(cripto).decode('latin').strip()
-                        }
+            json_message = {"type" : "sucess", "msg" : binascii.b2a_base64(cripto).decode('latin').strip()}
             
             if self.client_algorithm == "ChaCha20":
                 json_message["nonce"] = binascii.b2a_base64(self.nonce).decode('latin').strip()
@@ -281,7 +309,6 @@ class MediaServer(resource.Resource):
                 if self.client_mode == "GCM":
                     json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
                                     
-            request.responseHeaders.addRawHeader(b"content-type", b"application/json")
             return json.dumps(json_message).encode('latin')
     
     

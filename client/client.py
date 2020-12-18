@@ -46,8 +46,8 @@ class Client():
         response = self.send_msg("msg", {"carolina" : "ola orlando espero que esteja tudo bem obrigada por teres feito o trabalho todo", 
                               "orlando" : "ser ou n ser eis a questao"})
                 
-        text = self.msg_received(response)
-        logger.info(f'Resposta recebida do servidor: {text}')
+        dic_text = self.msg_received(response)
+        logger.info(f'Resposta recebida do servidor: {dic_text}')
         
         # GCM(iv)
         # associated_data = autor
@@ -194,15 +194,15 @@ class Client():
         
     def get_digest(self):
         if self.chosen_digest == 'SHA256':
-            self.digest = hashes.Hash(hashes.SHA256())
+            self.digest = hashes.Hash(hashes.SHA256(), backend=default_backend())
         elif self.chosen_digest == 'SHA512':
-            self.digest = hashes.Hash(hashes.SHA512())
+            self.digest = hashes.Hash(hashes.SHA512(), backend=default_backend())
         elif self.chosen_digest == 'BLAKE2b':
-            self.digest = hashes.Hash(hashes.BLAKE2b(64))
+            self.digest = hashes.Hash(hashes.BLAKE2b(64), backend=default_backend())
         elif self.chosen_digest == 'SHA3_256':
-            self.digest = hashes.Hash(hashes.SHA3_256())
+            self.digest = hashes.Hash(hashes.SHA3_256(), backend=default_backend())
         elif self.chosen_digest == 'SHA3_512':
-            self.digest = hashes.Hash(hashes.SHA3_512())
+            self.digest = hashes.Hash(hashes.SHA3_512(), backend=default_backend())
     
     def get_decryptor4msg(self):
         self.get_mode()
@@ -216,7 +216,7 @@ class Client():
         return 16
             
     def encrypt_message(self, msg):
-        data = json.dumps(msg)
+        data = json.dumps(msg).encode('latin')
         
         if self.chosen_mode == "GCM":
             self.tag = None
@@ -224,24 +224,24 @@ class Client():
         if self.chosen_algorithm == "ChaCha20":
             self.nonce = None
         
-        self.get_mode()
+        self.get_mode(True)
         self.get_algorithm()
         self.get_cipher()
         self.get_encryptor()
         blocksize = self.block_size()
         
         if self.chosen_algorithm == "ChaCha20":
-            return self.encryptor.update(str.encode(data)), ""
+            return self.encryptor.update(data), ""
 
         cripto = b''
         while True:
             portion = data[:blocksize]
             if len(portion) != blocksize:
-                portion = str.encode(portion) + bytes([blocksize - len(portion)] * (blocksize - len(portion)))
+                portion = portion + bytes([blocksize - len(portion)] * (blocksize - len(portion)))
                 cripto += self.encryptor.update(portion) + self.encryptor.finalize()
                 break
             
-            cripto += self.encryptor.update(str.encode(portion))
+            cripto += self.encryptor.update(portion)
             data = data[blocksize:]
             
             # se o modo for GCM
@@ -265,7 +265,7 @@ class Client():
         criptogram = binascii.a2b_base64(data["msg"].encode('latin'))
 
         if self.chosen_algorithm == "ChaCha20":
-            return self.decryptor.update(criptogram)
+            return json.loads(self.decryptor.update(criptogram).decode('latin'))
 
         block_size = self.block_size()
         text = b''
@@ -281,21 +281,18 @@ class Client():
             
             text += self.decryptor.update(portion)
             criptogram = criptogram[block_size:]
-            
-        text = json.loads(text)
-        return text
+        return json.loads(text.decode('latin'))
         
     def send_msg(self, type_, msg):
         logger.info(f'A enviar mensagem para servidor: {msg}')
         criptogram, tag = self.encrypt_message(msg)
         
-        dig = self.digest.update(criptogram) + self.digest.finalize()
-        print(criptogram, dig)
+        self.digest.update(criptogram)
         
         json_message = {
             "type" : type_,
             "msg" : binascii.b2a_base64(criptogram).decode('latin').strip(),
-            "digest" : binascii.b2a_base64(dig).decode('latin').strip()
+            "digest" : binascii.b2a_base64(self.digest.finalize()).decode('latin').strip()
         }
         
         if self.chosen_algorithm == "ChaCha20":
@@ -316,7 +313,7 @@ class Client():
             
     def msg_received(self, data):
         if data['type'] == "sucess":
-            return self.decrypt_message(response)
+            return self.decrypt_message(data)
         elif data['type'] == "error":
             return data['msg']
             

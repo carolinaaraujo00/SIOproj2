@@ -219,7 +219,7 @@ class MediaServer(resource.Resource):
         criptogram = binascii.a2b_base64(data["msg"].encode('latin'))
 
         if self.client_algorithm == "ChaCha20":
-            return self.decryptor.update(criptogram)
+            return json.loads(self.decryptor.update(criptogram).decode('latin'))
 
         block_size = self.block_size()
         text = b''
@@ -236,11 +236,10 @@ class MediaServer(resource.Resource):
             text += self.decryptor.update(portion)
             criptogram = criptogram[block_size:]
             
-        text = json.loads(text)
-        return text
+        return json.loads(text.decode('latin'))
     
     def encrypt_message(self, msg):
-        data = json.dumps(msg)
+        data = json.dumps(msg).encode('latin')
 
         if self.client_mode == "GCM":
             self.tag = None
@@ -255,17 +254,17 @@ class MediaServer(resource.Resource):
         blocksize = self.block_size()
         
         if self.client_algorithm == "ChaCha20":
-            return self.encryptor.update(str.encode(data)), ""
+            return self.encryptor.update(data), ""
 
         cripto = b''
         while True:
             portion = data[:blocksize]
-            if len(poration) != blocksize:
-                portion = str.encode(portion) + bytes([blocksize - len(portion)] * (blocksize - len(portion)))
+            if len(portion) != blocksize:
+                portion = portion + bytes([blocksize - len(portion)] * (blocksize - len(portion)))
                 cripto += self.encryptor.update(portion) + self.encryptor.finalize()
                 break
             
-            cripto += self.encryptor.update(str.encode(portion))
+            cripto += self.encryptor.update(portion)
             data = data[blocksize:]
         
         if self.client_mode == "GCM":
@@ -273,10 +272,10 @@ class MediaServer(resource.Resource):
         
         return cripto, ""
     
-    def check_integrity(self, msg, digest):
-        print(msg, digest)
-        dig = self.digest.update(msg) + self.digest.finalize()
-        if dig == digest:
+    def check_integrity(self, msg, digest):        
+        self.digest.update(binascii.a2b_base64(msg.encode('latin')))
+
+        if binascii.a2b_base64(digest.encode('latin')) == self.digest.finalize():
             logger.info("A mensagem chegou sem problemas :)")
             return True
         logger.error("A mensagem foi corrompida a meio do caminho.")
@@ -284,19 +283,18 @@ class MediaServer(resource.Resource):
 
     def msg_received(self, request):
         data = request.content.getvalue()
-        data = json.loads(data)
-        
-        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+        data = json.loads(data.decode('latin'))
         
         if data['type'] == 'msg':
-            if not check_integrity(data['msg'], data['digest']):
-                return json.dumps({'type' : 'error', 'msg' : "manda essa merda de novo brow"}).encode('latin')
+            if not self.check_integrity(data['msg'], data['digest']):
+                return self.send_response(request, {'type' : 'error', 'msg' : "manda essa merda de novo brow"})
 
-            text = self.decrypt_message(data)
-
-            logger.info(f'Mensagem recebida: {text}')
+            dic_text = self.decrypt_message(data)
+            logger.info(f'Mensagem recebida: {dic_text}')
+            
             msg = {"msg" : "A mensagem foi recebida brow."}
-            logger.info(f'A enviar resposta para cliente: {msg}')
+            logger.info(f'A enviar resposta para cliente: {msg["msg"]}')
+            
             cripto, tag = self.encrypt_message(msg)
             
             json_message = {"type" : "sucess", "msg" : binascii.b2a_base64(cripto).decode('latin').strip()}
@@ -309,7 +307,13 @@ class MediaServer(resource.Resource):
                 if self.client_mode == "GCM":
                     json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
                                     
-            return json.dumps(json_message).encode('latin')
+            return self.send_response(request, json_message)
+        
+    
+    def send_response(self, request, resp):
+        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+        
+        return json.dumps(resp).encode('latin')
     
     
     

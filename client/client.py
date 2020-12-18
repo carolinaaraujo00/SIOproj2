@@ -321,14 +321,15 @@ class Client():
         return False 
             
     def msg_received(self, data):
-        if data['type'] == "data":
-            """ Testar erro de integridade """
-            # if not self.check_integrity(data['msg'][len(data['msg']) - 1], data['digest']):
-            if not self.check_integrity(data['msg'], data['digest']):
-                return 'Mensagem corrompida'
-            return self.decrypt_message(data)
-        elif data['type'] == "error":
-            return data['error']
+        # if data['type'] == "data":
+        #     """ Testar erro de integridade """
+        #     # if not self.check_integrity(data['msg'][len(data['msg']) - 1], data['digest']):
+        #     if not self.check_integrity(data['msg'], data['digest']):
+        #         return 'Mensagem corrompida'
+        #     return self.decrypt_message(data)
+        # elif data['type'] == "error":
+        #     print(data)
+        #     return self.decrypt_message(data)['error']
         
         if not self.check_integrity(data['msg'], data['digest']):
             return 'Mensagem corrompida'

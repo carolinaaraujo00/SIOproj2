@@ -287,8 +287,8 @@ class MediaServer(resource.Resource):
         
         if data['type'] == 'msg':
             if not self.check_integrity(data['msg'], data['digest']):
-                return json.dumps({'type' : 'error', 'msg' : "manda essa merda de novo brow"}).encode('latin')
-
+                return self.send_response(request, "error", {'error' : "manda isso de novo brow"})
+                
             dic_text = self.decrypt_message(data)
             logger.info(f'Mensagem recebida: {dic_text}')
             
@@ -297,9 +297,9 @@ class MediaServer(resource.Resource):
             return self.send_response(request, msg)
         
     
-    def send_response(self, request, resp):
+    def send_response(self, request, type_, resp):
         
-        logger.info(f'A enviar resposta para cliente: {resp}')
+        # logger.info(f'A enviar resposta para cliente: {resp}')
             
         cripto, tag = self.encrypt_message(resp)
         
@@ -307,7 +307,7 @@ class MediaServer(resource.Resource):
         self.digest.update(cripto)
         
         json_message = {
-                    "type" : "sucess",
+                    "type" : type_,
                     "msg" : binascii.b2a_base64(cripto).decode('latin').strip(),
                     "digest" : binascii.b2a_base64(self.digest.finalize()).decode('latin').strip()
                     }
@@ -345,7 +345,7 @@ class MediaServer(resource.Resource):
 
         # Return list to client
         # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        return self.send_response(request, media_list)
+        return self.send_response(request, "data", media_list)
 
 
     # Send a media chunk to the client
@@ -358,8 +358,7 @@ class MediaServer(resource.Resource):
         # Check if the media_id is not None as it is required
         if media_id is None:
             request.setResponseCode(400)
-            request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-            return json.dumps({'error': 'invalid media id'}).encode('latin')
+            return self.send_response(request, "error", {'error': 'invalid media id'})
         
         # Convert bytes to str
         media_id = media_id.decode('latin')
@@ -367,8 +366,7 @@ class MediaServer(resource.Resource):
         # Search media_id in the catalog
         if media_id not in CATALOG:
             request.setResponseCode(404)
-            request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-            return json.dumps({'error': 'media file not found'}).encode('latin')
+            return self.send_response(request, "error", {'error': 'media file not found'})
         
         # Get the media item
         media_item = CATALOG[media_id]
@@ -385,9 +383,8 @@ class MediaServer(resource.Resource):
 
         if not valid_chunk:
             request.setResponseCode(400)
-            request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-            return json.dumps({'error': 'invalid chunk id'}).encode('latin')
-            
+            return self.send_response(request, "error", {'error': 'invalid chunk id'})
+                        
         logger.debug(f'Download: chunk: {chunk_id}')
 
         offset = chunk_id * CHUNK_SIZE
@@ -398,23 +395,15 @@ class MediaServer(resource.Resource):
             data = f.read(CHUNK_SIZE)
 
             # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-            return self.send_response(request, {
+            return self.send_response(request, "data", {
                 'media_id': media_id,
                 'chunk': chunk_id,
                 'data': binascii.b2a_base64(data).decode('latin').strip()
             })
-            # return json.dumps(
-            #         {
-            #             'media_id': media_id, 
-            #             'chunk': chunk_id, 
-            #             'data': binascii.b2a_base64(data).decode('latin').strip()
-            #         },indent=4
-            #     ).encode('latin')
 
         # File was not open?
-        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        return json.dumps({'error': 'unknown'}, indent=4).encode('latin')
-        
+        return self.send_response(request, "error", {'error': 'unknown'})
+                
     # Handle a GET request
     def render_GET(self, request):
         logger.debug(f'Received request for {request.uri}')

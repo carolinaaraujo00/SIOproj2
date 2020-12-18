@@ -321,15 +321,24 @@ class Client():
         return False 
             
     def msg_received(self, data):
-        if data['type'] == "sucess":
+        if data['type'] == "data":
             """ Testar erro de integridade """
             # if not self.check_integrity(data['msg'][len(data['msg']) - 1], data['digest']):
             if not self.check_integrity(data['msg'], data['digest']):
-                return 'Mensage corrompida'
+                return 'Mensagem corrompida'
             return self.decrypt_message(data)
         elif data['type'] == "error":
-            return data['msg']
-     
+            return data['error']
+        
+        if not self.check_integrity(data['msg'], data['digest']):
+            return 'Mensagem corrompida'
+        
+        if data['type'] == "data":
+            return self.decrypt_message(data)
+        elif data['type'] == "error":
+            return self.decrypt_message(data)['error']
+        else:
+            return f'Recebi um tipo de dados desconhecido: {data}'
 def main():
     print("|--------------------------------------|")
     print("|         SECURE MEDIA CLIENT          |")

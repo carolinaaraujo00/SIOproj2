@@ -321,25 +321,6 @@ class MediaServer(resource.Resource):
                 json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
         
         return json.dumps(json_message).encode('latin')
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
 
     # Send the list of media files to clients
     def do_list(self, request):
@@ -363,8 +344,8 @@ class MediaServer(resource.Resource):
                 })
 
         # Return list to client
-        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        return json.dumps(media_list, indent=4).encode('latin')
+        # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+        return self.send_response(request, media_list)
 
 
     # Send a media chunk to the client
@@ -416,14 +397,19 @@ class MediaServer(resource.Resource):
             f.seek(offset)
             data = f.read(CHUNK_SIZE)
 
-            request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-            return json.dumps(
-                    {
-                        'media_id': media_id, 
-                        'chunk': chunk_id, 
-                        'data': binascii.b2a_base64(data).decode('latin').strip()
-                    },indent=4
-                ).encode('latin')
+            # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+            return self.send_response(request, {
+                'media_id': media_id,
+                'chunk': chunk_id,
+                'data': binascii.b2a_base64(data).decode('latin').strip()
+            })
+            # return json.dumps(
+            #         {
+            #             'media_id': media_id, 
+            #             'chunk': chunk_id, 
+            #             'data': binascii.b2a_base64(data).decode('latin').strip()
+            #         },indent=4
+            #     ).encode('latin')
 
         # File was not open?
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
@@ -445,9 +431,9 @@ class MediaServer(resource.Resource):
 
             elif request.path == b'/api/download':
                 return self.do_download(request)
-            elif request.path == b'/api/get_public_key_dh':
-                request.responseHeaders.addRawHeader(b"content-type", b'application/json')
-                return json.dumps(binascii.b2a_base64(self.public_key_dh).decode('latin').strip(), indent=4).encode('latin')
+            # elif request.path == b'/api/get_public_key_dh':
+            #     request.responseHeaders.addRawHeader(b"content-type", b'application/json')
+            #     return json.dumps(binascii.b2a_base64(self.public_key_dh).decode('latin').strip(), indent=4).encode('latin')
 
             else:
                 request.responseHeaders.addRawHeader(b"content-type", b'text/plain')

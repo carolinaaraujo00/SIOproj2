@@ -43,11 +43,11 @@ class Client():
         
         self.get_key()
         
-        response = self.send_msg("msg", {"carolina" : "ola orlando espero que esteja tudo bem obrigada por teres feito o trabalho todo", 
-                              "orlando" : "ser ou n ser eis a questao"})
+        # response = self.send_msg("msg", {"carolina" : "ola orlando espero que esteja tudo bem obrigada por teres feito o trabalho todo", 
+                            #   "orlando" : "ser ou n ser eis a questao"})
                 
-        dic_text = self.msg_received(response)
-        logger.info(f'Resposta recebida do servidor: {dic_text}')
+        # dic_text = self.msg_received(response)
+        # logger.info(f'Resposta recebida do servidor: {dic_text}')
         
         # GCM(iv)
         # associated_data = autor
@@ -329,14 +329,7 @@ class Client():
             return self.decrypt_message(data)
         elif data['type'] == "error":
             return data['msg']
-            
-            
-            
-            
-            
-            
-            
-        
+     
 def main():
     print("|--------------------------------------|")
     print("|         SECURE MEDIA CLIENT          |")
@@ -346,12 +339,14 @@ def main():
     print("Contacting Server")
     
     # TODO: Secure the session
+    client = Client()
 
     req = requests.get(f'{SERVER_URL}/api/list')
     if req.status_code == 200:
         print("Got Server List")
-        
-    media_list = req.json()
+    
+    media_list = client.msg_received(req.json())
+    
 
     # Present a simple selection menu    
     idx = 0
@@ -373,6 +368,7 @@ def main():
         if 0 <= selection < len(media_list):
             break
 
+    
     # Example: Download first file
     media_item = media_list[selection]
     print(f"Playing {media_item['name']}")
@@ -388,8 +384,9 @@ def main():
     # Get data from server and send it to the ffplay stdin through a pipe
     for chunk in range(media_item['chunks'] + 1):
         req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}')
-        chunk = req.json()
-       
+
+        chunk = client.msg_received(req.json())
+    
         # TODO: Process chunk
 
         data = binascii.a2b_base64(chunk['data'].encode('latin'))
@@ -397,9 +394,9 @@ def main():
             proc.stdin.write(data)
         except:
             break
+    
         
 if __name__ == '__main__':
-    client = Client()
-    # while True:
-    #     main()
-    #     time.sleep(1)
+    while True:
+        main()
+        time.sleep(1)

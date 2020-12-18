@@ -77,10 +77,7 @@ class Client():
             self.chosen_mode = self.choose_cycle('What mode would you like to use? ', matching_modes)
         
         self.chosen_digest = self.choose_cycle('What digest would you like to use? ', matching_digests)
-        
-        # TODO retirar daqui pq secalhar n é a melhor solucao
-        self.get_digest()
-        
+                
         logger.info(f'Protocols chosen:\n\tAlgorithm: {self.chosen_algorithm}\n\tMode: {self.chosen_mode}\n\tDigest: {self.chosen_digest}')
         return {'algorithm' : self.chosen_algorithm, 'mode' : self.chosen_mode, 'digest' : self.chosen_digest}
     
@@ -287,6 +284,7 @@ class Client():
         logger.info(f'A enviar mensagem para servidor: {msg}')
         criptogram, tag = self.encrypt_message(msg)
         
+        self.get_digest()
         self.digest.update(criptogram)
         
         json_message = {
@@ -311,8 +309,23 @@ class Client():
         else:
             logger.error('Não houve json de resposta por parte do servidor')
             
+    def check_integrity(self, msg, digest):
+        self.get_digest()
+        self.digest.update(binascii.a2b_base64(msg.encode('latin')))
+
+        if binascii.a2b_base64(digest.encode('latin')) == self.digest.finalize():
+            logger.info("A mensagem chegou sem problemas :)")
+            return True
+        logger.error("A mensagem foi corrompida a meio do caminho.")
+        
+        return False 
+            
     def msg_received(self, data):
         if data['type'] == "sucess":
+            """ Testar erro de integridade """
+            # if not self.check_integrity(data['msg'][len(data['msg']) - 1], data['digest']):
+            if not self.check_integrity(data['msg'], data['digest']):
+                return 'Mensage corrompida'
             return self.decrypt_message(data)
         elif data['type'] == "error":
             return data['msg']

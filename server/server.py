@@ -89,10 +89,7 @@ class MediaServer(resource.Resource):
         self.client_algorithm = data['algorithm']
         self.client_mode = data['mode']
         self.client_digest = data['digest']
-        
-        # TODO talvez remover digest deste metodo
-        self.get_digest()
-        
+                
         logger.info(f'Client protocols: Cipher:{self.client_algorithm}; Mode:{self.client_mode}; Digest:{self.client_digest}')
         
     def dh_public_key(self, request):
@@ -272,7 +269,8 @@ class MediaServer(resource.Resource):
         
         return cripto, ""
     
-    def check_integrity(self, msg, digest):        
+    def check_integrity(self, msg, digest):
+        self.get_digest()
         self.digest.update(binascii.a2b_base64(msg.encode('latin')))
 
         if binascii.a2b_base64(digest.encode('latin')) == self.digest.finalize():
@@ -285,35 +283,44 @@ class MediaServer(resource.Resource):
         data = request.content.getvalue()
         data = json.loads(data.decode('latin'))
         
+        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+        
         if data['type'] == 'msg':
             if not self.check_integrity(data['msg'], data['digest']):
-                return self.send_response(request, {'type' : 'error', 'msg' : "manda essa merda de novo brow"})
+                return json.dumps({'type' : 'error', 'msg' : "manda essa merda de novo brow"}).encode('latin')
 
             dic_text = self.decrypt_message(data)
             logger.info(f'Mensagem recebida: {dic_text}')
             
             msg = {"msg" : "A mensagem foi recebida brow."}
-            logger.info(f'A enviar resposta para cliente: {msg["msg"]}')
             
-            cripto, tag = self.encrypt_message(msg)
-            
-            json_message = {"type" : "sucess", "msg" : binascii.b2a_base64(cripto).decode('latin').strip()}
-            
-            if self.client_algorithm == "ChaCha20":
-                json_message["nonce"] = binascii.b2a_base64(self.nonce).decode('latin').strip()
-            else:
-                json_message["iv"] = binascii.b2a_base64(self.iv).decode('latin').strip()
-                    
-                if self.client_mode == "GCM":
-                    json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
-                                    
-            return self.send_response(request, json_message)
+            return self.send_response(request, msg)
         
     
     def send_response(self, request, resp):
-        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         
-        return json.dumps(resp).encode('latin')
+        logger.info(f'A enviar resposta para cliente: {resp}')
+            
+        cripto, tag = self.encrypt_message(resp)
+        
+        self.get_digest()
+        self.digest.update(cripto)
+        
+        json_message = {
+                    "type" : "sucess",
+                    "msg" : binascii.b2a_base64(cripto).decode('latin').strip(),
+                    "digest" : binascii.b2a_base64(self.digest.finalize()).decode('latin').strip()
+                    }
+        
+        if self.client_algorithm == "ChaCha20":
+            json_message["nonce"] = binascii.b2a_base64(self.nonce).decode('latin').strip()
+        else:
+            json_message["iv"] = binascii.b2a_base64(self.iv).decode('latin').strip()
+                
+            if self.client_mode == "GCM":
+                json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
+        
+        return json.dumps(json_message).encode('latin')
     
     
     

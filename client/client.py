@@ -24,7 +24,7 @@ SERVER_URL = 'http://127.0.0.1:8080'
 
 ALGORITHMS = ['AES', 'ChaCha20', '3DES']
 MODES = ['CBC', 'OFB', 'CFB', 'GCM']
-DIGEST = ['SHA256', 'SHA512', 'SHA1', 'MD5']
+DIGEST = ['SHA256', 'SHA512', 'BLAKE2b', 'SHA3_256', 'SHA3_512']
 
 class Client():
     def __init__(self):

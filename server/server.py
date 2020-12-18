@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 logger = logging.getLogger('root')
 FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
@@ -33,9 +34,9 @@ CATALOG = { '898a08080d1840793122b7e118b27a95d117ebce':
 CATALOG_BASE = 'catalog'
 CHUNK_SIZE = 1024 * 4
 
-CIPHERS = ['AES', 'ChaCha20', '3DES']
+ALGORITHMS = ['AES', 'ChaCha20', '3DES']
 MODES = ['CBC', 'OFB', 'CFB', 'GCM']
-DIGEST = ['SHA256', 'SHA512', 'SHA1', 'MD5']
+DIGEST = ['SHA256', 'SHA512', 'BLAKE2b', 'SHA3_256', 'SHA3_512']
 
 class MediaServer(resource.Resource):
     isLeaf = True
@@ -45,16 +46,54 @@ class MediaServer(resource.Resource):
         self.client_digest = None
         self.private_key = None
         self.public_key = None
+        self.tag = None
+        
+        
+    def get_communication_assets(self):
+        # derivar a chave partilhada de acordo com cifra utilizada
+        self.get_key()
+        
+        # inicializar o modo
+        self.get_mode()
+        
+        # inicializar a cifra
+        self.get_algorithm()
+        self.get_cipher()
+        
+        # encriptador
+        self.get_encryptor()
+        
+        # cifra = self.encryptor.update(b"a secret message") + self.encryptor.finalize()
+        # print(cifra)
+        
+        # decriptador
+        self.get_decryptor()
+        
+        # message = self.decryptor.update(cifra) + self.decryptor.finalize()
+        # print(message)
     
     def do_get_protocols(self, request):
         logger.debug(f'Client asked for protocols')
         return json.dumps(
             {
-                'ciphers': CIPHERS, 
+                'algorithms': ALGORITHMS, 
                 'modes': MODES, 
                 'digests': DIGEST
             },indent=4
         ).encode('latin')
+    
+    def client_protocols(self, request):
+        data = request.content.getvalue()
+        data = json.loads(data)
+
+        self.client_algorithm = data['algorithm']
+        self.client_mode = data['mode']
+        self.client_digest = data['digest']
+        
+        # TODO talvez remover digest deste metodo
+        self.get_digest()
+        
+        logger.info(f'Client protocols: Cipher:{self.client_algorithm}; Mode:{self.client_mode}; Digest:{self.client_digest}')
         
     def dh_public_key(self, request):
         # colocar key_size a 2048
@@ -79,7 +118,221 @@ class MediaServer(resource.Resource):
         # chave comum a servidor e cliente
         self.shared_key = private_key.exchange(client_public_key)
         
-        logger.debug(f'chave partilhada: {self.shared_key}')
+        logger.debug(f'Shared Key created sucessfully')
+        
+        # inicializar o processo de criar encriptador e decriptador
+        self.get_key()
+        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+        return json.dumps({"key" : binascii.b2a_base64(self.public_key_dh).decode('latin').strip()}, indent=4).encode('latin')
+        
+    def get_key(self):
+        if self.client_algorithm == 'AES' or self.client_algorithm == 'ChaCha20':
+            self.key = self.derive_shared_key(hashes.SHA256(), 32, None, b'handshake data')
+        elif self.client_algorithm == '3DES':
+            self.key = self.derive_shared_key(hashes.SHA256(), 24, None, b'handshake data')
+        
+    def derive_shared_key(self, algorithm, length, salt, info):
+        # utilizar PBKDF2HMAC talvez seja mais seguro
+        derived_key = HKDF(
+            algorithm=algorithm,
+            length=length,
+            salt=salt,
+            info=info,
+        ).derive(self.shared_key)
+        
+        return derived_key
+    
+    def get_iv(self, bytes_=16):
+        self.iv = os.urandom(bytes_)
+    
+    def get_mode(self, make_iv=False):
+        if self.client_algorithm == 'ChaCha20':
+            self.mode = None
+            return 
+        if make_iv:
+            if self.client_algorithm == 'AES':
+                self.get_iv()
+            elif self.client_algorithm == '3DES':
+                self.get_iv(8)
+                
+        if self.client_mode == 'CBC':
+            self.mode = modes.CBC(self.iv)
+        elif self.client_mode == 'OFB':
+            self.mode = modes.OFB(self.iv)
+        elif self.client_mode == 'CFB':
+            self.mode = modes.CFB(self.iv)
+        elif self.client_mode == 'GCM':
+            self.mode = modes.GCM(self.iv, self.tag)
+    
+    def get_algorithm(self):
+        if self.client_algorithm == 'AES':
+            self.algorithm = algorithms.AES(self.key)
+        elif self.client_algorithm == 'ChaCha20':
+            if not self.nonce:
+                self.nonce = os.urandom(16)
+            self.algorithm = algorithms.ChaCha20(self.key, self.nonce)
+        elif self.client_algorithm == '3DES':
+            self.algorithm = algorithms.TripleDES(self.key)
+            
+    def get_cipher(self):
+        self.cipher = Cipher(self.algorithm, mode=self.mode, backend=default_backend())
+
+    def get_encryptor(self):
+        self.encryptor = self.cipher.encryptor()
+        
+    def get_decryptor(self):
+        self.decryptor = self.cipher.decryptor()
+        
+    def get_digest(self):
+        if self.client_digest == 'SHA256':
+            self.digest = hashes.Hash(hashes.SHA256())
+        elif self.client_digest == 'SHA512':
+            self.digest = hashes.Hash(hashes.SHA512())
+        elif self.client_digest == 'BLAKE2b':
+            self.digest = hashes.Hash(hashes.BLAKE2b(64))
+        elif self.client_digest == 'SHA3_256':
+            self.digest = hashes.Hash(hashes.SHA3_256())
+        elif self.client_digest == 'SHA3_512':
+            self.digest = hashes.Hash(hashes.SHA3_512())
+        
+    def block_size(self):
+        if self.client_algorithm == '3DES':
+            return 8
+        return 16
+        
+    def get_decryptor4msg(self):
+        self.get_mode()
+        self.get_algorithm()
+        self.get_cipher()
+        self.get_decryptor()
+        
+    def decrypt_message(self, data):
+        if "tag" in data:
+            self.tag = binascii.a2b_base64(data["tag"].encode('latin'))
+        if "nonce" in data:
+            self.nonce = binascii.a2b_base64(data["nonce"].encode('latin'))
+        if "iv" in data:
+            self.iv = binascii.a2b_base64(data["iv"].encode('latin'))
+            
+        self.get_decryptor4msg()
+        
+        criptogram = binascii.a2b_base64(data["msg"].encode('latin'))
+
+        if self.client_algorithm == "ChaCha20":
+            return json.loads(self.decryptor.update(criptogram).decode('latin'))
+
+        block_size = self.block_size()
+        text = b''
+        last_block = criptogram[len(criptogram) - block_size :]
+        criptogram = criptogram[:-block_size]
+        
+        while True:
+            portion = criptogram[:block_size]
+            if len(portion) == 0:
+                dec = self.decryptor.update(last_block) + self.decryptor.finalize()
+                text += dec[:block_size - dec[-1]]
+                break
+            
+            text += self.decryptor.update(portion)
+            criptogram = criptogram[block_size:]
+            
+        return json.loads(text.decode('latin'))
+    
+    def encrypt_message(self, msg):
+        data = json.dumps(msg).encode('latin')
+
+        if self.client_mode == "GCM":
+            self.tag = None
+            
+        if self.client_algorithm == "ChaCha20":
+            self.nonce = None
+
+        self.get_mode(True)
+        self.get_algorithm()
+        self.get_cipher()
+        self.get_encryptor()
+        blocksize = self.block_size()
+        
+        if self.client_algorithm == "ChaCha20":
+            return self.encryptor.update(data), ""
+
+        cripto = b''
+        while True:
+            portion = data[:blocksize]
+            if len(portion) != blocksize:
+                portion = portion + bytes([blocksize - len(portion)] * (blocksize - len(portion)))
+                cripto += self.encryptor.update(portion) + self.encryptor.finalize()
+                break
+            
+            cripto += self.encryptor.update(portion)
+            data = data[blocksize:]
+        
+        if self.client_mode == "GCM":
+            return cripto, self.encryptor.tag
+        
+        return cripto, ""
+    
+    def check_integrity(self, msg, digest):        
+        self.digest.update(binascii.a2b_base64(msg.encode('latin')))
+
+        if binascii.a2b_base64(digest.encode('latin')) == self.digest.finalize():
+            logger.info("A mensagem chegou sem problemas :)")
+            return True
+        logger.error("A mensagem foi corrompida a meio do caminho.")
+        return False 
+
+    def msg_received(self, request):
+        data = request.content.getvalue()
+        data = json.loads(data.decode('latin'))
+        
+        if data['type'] == 'msg':
+            if not self.check_integrity(data['msg'], data['digest']):
+                return self.send_response(request, {'type' : 'error', 'msg' : "manda essa merda de novo brow"})
+
+            dic_text = self.decrypt_message(data)
+            logger.info(f'Mensagem recebida: {dic_text}')
+            
+            msg = {"msg" : "A mensagem foi recebida brow."}
+            logger.info(f'A enviar resposta para cliente: {msg["msg"]}')
+            
+            cripto, tag = self.encrypt_message(msg)
+            
+            json_message = {"type" : "sucess", "msg" : binascii.b2a_base64(cripto).decode('latin').strip()}
+            
+            if self.client_algorithm == "ChaCha20":
+                json_message["nonce"] = binascii.b2a_base64(self.nonce).decode('latin').strip()
+            else:
+                json_message["iv"] = binascii.b2a_base64(self.iv).decode('latin').strip()
+                    
+                if self.client_mode == "GCM":
+                    json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
+                                    
+            return self.send_response(request, json_message)
+        
+    
+    def send_response(self, request, resp):
+        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+        
+        return json.dumps(resp).encode('latin')
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
 
     # Send the list of media files to clients
     def do_list(self, request):
@@ -168,15 +421,6 @@ class MediaServer(resource.Resource):
         # File was not open?
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         return json.dumps({'error': 'unknown'}, indent=4).encode('latin')
-    
-    def client_protocols(self, request):
-        data = request.content.getvalue()
-        data = json.loads(data)
-
-        self.client_cipher = data['ciphers']
-        self.client_mode = data['modes']
-        self.client_digest = data['digests']
-        logger.info(f'Client protocols: Cipher:{self.client_cipher}; Mode:{self.client_mode}; Digest:{self.client_digest}')
         
     # Handle a GET request
     def render_GET(self, request):
@@ -215,7 +459,9 @@ class MediaServer(resource.Resource):
             if request.path == b'/api/protocol_choice':
                 self.client_protocols(request)
             elif request.path == b'/api/dh_client_public_key':
-                self.dh_public_key(request)
+                return self.dh_public_key(request)
+            elif request.path == b'/api/msg':
+                return self.msg_received(request)
         
         except Exception as e:
             logger.exception(e)

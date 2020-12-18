@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 logger = logging.getLogger('root')
 FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
@@ -21,20 +22,39 @@ logger.setLevel(logging.INFO)
 
 SERVER_URL = 'http://127.0.0.1:8080'
 
-CIPHERS = ['AES', 'ChaCha20', '3DES']
+ALGORITHMS = ['AES', 'ChaCha20', '3DES']
 MODES = ['CBC', 'OFB', 'CFB', 'GCM']
 DIGEST = ['SHA256', 'SHA512', 'SHA1', 'MD5']
 
 class Client():
     def __init__(self):
+        self.tag = None
+        self.chosen_mode = None
         self.server_protocols = self.get_protocols_from_server()
         self.chosen_protocols = self.choose_protocol()
         
         # enviar para o servidor os protocolos escolhidos
         self.send_to_server(f'{SERVER_URL}/api/protocol_choice', self.chosen_protocols)
         
-        self.dhe() # criar a chave publica dh para enviar ao servidor
+        # criar a chave publica dh para enviar ao servidor
+        self.dhe() 
         
+        # derivar a chave partilhada de acordo com cifra utilizada
+        
+        self.get_key()
+        
+        response = self.send_msg("msg", {"carolina" : "ola orlando espero que esteja tudo bem obrigada por teres feito o trabalho todo", 
+                              "orlando" : "ser ou n ser eis a questao"})
+                
+        dic_text = self.msg_received(response)
+        logger.info(f'Resposta recebida do servidor: {dic_text}')
+        
+        # GCM(iv)
+        # associated_data = autor
+        # encryptor.authenticate_additional_data(associated_data)
+        # encryptor.tag
+        # GCM(iv, tag)
+        # decryptor.authenticate_additional_data(associated_data)        
         
     def get_protocols_from_server(self):
         req_protocols = requests.get(f'{SERVER_URL}/api/protocols')
@@ -42,16 +62,46 @@ class Client():
             logger.info('Got Protocols List')
 
         protocols_avail = req_protocols.json()
-        # print("\nAvailable protocols in the server:\n   Ciphers: " + str(protocols_avail['ciphers'])+"\n   Modes: " + str(protocols_avail['modes']) + "\n   Digests: " + str(protocols_avail['digests']) +"\n" )
-        logger.info(f'Available protocols in the server:\n\tCiphers: {protocols_avail["ciphers"]}\n\tModes: {protocols_avail["modes"]}\n\tDigests: {protocols_avail["digests"]}')
+        logger.info(f'Available protocols in the server:\n\Algorithms: {protocols_avail["algorithms"]}\n\tModes: {protocols_avail["modes"]}\n\tDigests: {protocols_avail["digests"]}')
 
         return protocols_avail
     
     def choose_protocol(self):
-        ret = { k: op[random.randint(0, len(op)-1)] for k, op in self.server_protocols.items() }
-        logger.info(f'Protocols chosen:\n\tCipher: {ret["ciphers"]}\n\tMode: {ret["modes"]}\n\tDigest: {ret["digests"]}')
-        return ret
+        matching_algorithms = [alg for alg in self.server_protocols['algorithms'] if alg in ALGORITHMS]
+        matching_modes = [mode for mode in self.server_protocols['modes'] if mode in MODES]
+        matching_digests = [dig for dig in self.server_protocols['digests'] if dig in DIGEST]
+        
+        self.chosen_algorithm = self.choose_cycle('What algorithm would you like to use? ', matching_algorithms)
+        
+        if self.chosen_algorithm != 'ChaCha20':
+            self.chosen_mode = self.choose_cycle('What mode would you like to use? ', matching_modes)
+        
+        self.chosen_digest = self.choose_cycle('What digest would you like to use? ', matching_digests)
+        
+        # TODO retirar daqui pq secalhar n é a melhor solucao
+        self.get_digest()
+        
+        logger.info(f'Protocols chosen:\n\tAlgorithm: {self.chosen_algorithm}\n\tMode: {self.chosen_mode}\n\tDigest: {self.chosen_digest}')
+        return {'algorithm' : self.chosen_algorithm, 'mode' : self.chosen_mode, 'digest' : self.chosen_digest}
+    
+    def choose_cycle(self, msg, list_):
+        print('###############################')
+        for i in range(len(list_)):
+            print(f'{i} -- {list_[i]}')
+        print('..............................')
+        selection = None
+        while True:
+            selection = input(msg)
 
+            if not selection.isdigit():
+                continue
+
+            selection = int(selection)
+            if 0 <= selection < len(list_):
+                break
+        print('###############################')            
+        return list_[selection]
+        
     def send_to_server(self, uri ,msg, bytes_=False):
         if bytes_:
             return requests.post(uri, data = msg)
@@ -74,37 +124,205 @@ class Client():
         )
         # enviar chave publica dh para o servidor        
         request = self.send_to_server(f'{SERVER_URL}/api/dh_client_public_key', data, True)
+        server_public_key = binascii.a2b_base64(request.json()['key'].encode('latin'))
         
-        req = requests.get(f'{SERVER_URL}/api/get_public_key_dh')
-        chunk = req.json()
-        server_public_key = binascii.a2b_base64(chunk.encode('latin'))
-
         server_public_key = serialization.load_der_public_key(server_public_key, backend=default_backend())
         
         self.shared_key = private_key.exchange(server_public_key)
-        print(self.shared_key)
+
+        logger.info('Shared Key created sucessfully')
         
-        # logger.debug(f'chave partilhada: {self.shared_key}')
+    def get_key(self):
+        if self.chosen_algorithm == 'AES' or self.chosen_algorithm == 'ChaCha20':
+            self.key = self.derive_shared_key(hashes.SHA256(), 32, None, b'handshake data')
+        elif self.chosen_algorithm == '3DES':
+            self.key = self.derive_shared_key(hashes.SHA256(), 24, None, b'handshake data')
         
-        # criptograma - cifra simetrica 
-        # digest() 
-        """
+    def derive_shared_key(self, algorithm, length, salt, info):
+        # utilizar PBKDF2HMAC talvez seja mais seguro
         derived_key = HKDF(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=None,
-            info=b'handshake data',
-        ).derive(shared_key)
+            algorithm=algorithm,
+            length=length,
+            salt=salt,
+            info=info,
+        ).derive(self.shared_key)
         
-        private_key_2 = parameters.generate_private_key()
-        peer_public_key_2 = parameters.generate_private_key().public_key()
-        shared_key_2 = private_key_2.exchange(peer_public_key_2)
-        derived_key_2 = HKDF(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=None,
-            info=b'handshake data',
-        ).derive(shared_key_2) """
+        return derived_key
+    
+    def get_iv(self, bytes_=16):
+        self.iv = os.urandom(bytes_)
+    
+    def get_mode(self, make_iv=False):
+        if self.chosen_algorithm == 'ChaCha20':
+            self.mode = None
+            return
+        if make_iv:
+            if self.chosen_algorithm == 'AES':
+                self.get_iv()
+            elif self.chosen_algorithm == '3DES':
+                self.get_iv(8)
+                
+        if self.chosen_mode == 'CBC':
+            self.mode = modes.CBC(self.iv)
+        elif self.chosen_mode == 'OFB':
+            self.mode = modes.OFB(self.iv)
+        elif self.chosen_mode == 'CFB':
+            self.mode = modes.CFB(self.iv)
+        elif self.chosen_mode == 'GCM':
+            self.mode = modes.GCM(self.iv, self.tag)
+    
+    def get_algorithm(self):
+        if self.chosen_algorithm == 'AES':
+            self.algorithm = algorithms.AES(self.key)
+        elif self.chosen_algorithm == 'ChaCha20':
+            if not self.nonce:
+                self.nonce = os.urandom(16)
+            self.algorithm = algorithms.ChaCha20(self.key, self.nonce)
+        elif self.chosen_algorithm == '3DES':
+            self.algorithm = algorithms.TripleDES(self.key)
+            
+    def get_cipher(self):
+        if self.chosen_algorithm == 'ChaCha20':
+            pass
+        self.cipher = Cipher(self.algorithm, self.mode, default_backend())
+        
+    def get_encryptor(self):
+        self.encryptor = self.cipher.encryptor()
+        
+    def get_decryptor(self):
+        self.decryptor = self.cipher.decryptor()
+        
+    def get_digest(self):
+        if self.chosen_digest == 'SHA256':
+            self.digest = hashes.Hash(hashes.SHA256(), backend=default_backend())
+        elif self.chosen_digest == 'SHA512':
+            self.digest = hashes.Hash(hashes.SHA512(), backend=default_backend())
+        elif self.chosen_digest == 'BLAKE2b':
+            self.digest = hashes.Hash(hashes.BLAKE2b(64), backend=default_backend())
+        elif self.chosen_digest == 'SHA3_256':
+            self.digest = hashes.Hash(hashes.SHA3_256(), backend=default_backend())
+        elif self.chosen_digest == 'SHA3_512':
+            self.digest = hashes.Hash(hashes.SHA3_512(), backend=default_backend())
+    
+    def get_decryptor4msg(self):
+        self.get_mode()
+        self.get_algorithm()
+        self.get_cipher()
+        self.get_decryptor()
+        
+    def block_size(self):
+        if self.chosen_algorithm == '3DES':
+            return 8
+        return 16
+            
+    def encrypt_message(self, msg):
+        data = json.dumps(msg).encode('latin')
+        
+        if self.chosen_mode == "GCM":
+            self.tag = None
+            
+        if self.chosen_algorithm == "ChaCha20":
+            self.nonce = None
+        
+        self.get_mode(True)
+        self.get_algorithm()
+        self.get_cipher()
+        self.get_encryptor()
+        blocksize = self.block_size()
+        
+        if self.chosen_algorithm == "ChaCha20":
+            return self.encryptor.update(data), ""
+
+        cripto = b''
+        while True:
+            portion = data[:blocksize]
+            if len(portion) != blocksize:
+                portion = portion + bytes([blocksize - len(portion)] * (blocksize - len(portion)))
+                cripto += self.encryptor.update(portion) + self.encryptor.finalize()
+                break
+            
+            cripto += self.encryptor.update(portion)
+            data = data[blocksize:]
+            
+            # se o modo for GCM
+        if self.chosen_mode == "GCM":
+            return cripto, self.encryptor.tag
+        
+        
+        return cripto, ""
+    
+    def decrypt_message(self, data):
+        if "tag" in data:
+            self.tag = binascii.a2b_base64(data["tag"].encode('latin'))
+        if "nonce" in data:
+            self.nonce = binascii.a2b_base64(data["nonce"].encode('latin'))
+        if "iv" in data:
+            self.iv = binascii.a2b_base64(data["iv"].encode('latin'))
+        
+        
+        self.get_decryptor4msg()     
+        
+        criptogram = binascii.a2b_base64(data["msg"].encode('latin'))
+
+        if self.chosen_algorithm == "ChaCha20":
+            return json.loads(self.decryptor.update(criptogram).decode('latin'))
+
+        block_size = self.block_size()
+        text = b''
+        last_block = criptogram[len(criptogram) - block_size :]
+        criptogram = criptogram[:-block_size]
+        
+        while True:
+            portion = criptogram[:block_size]
+            if len(portion) == 0:
+                dec = self.decryptor.update(last_block) + self.decryptor.finalize()
+                text += dec[:block_size - dec[-1]]
+                break
+            
+            text += self.decryptor.update(portion)
+            criptogram = criptogram[block_size:]
+        return json.loads(text.decode('latin'))
+        
+    def send_msg(self, type_, msg):
+        logger.info(f'A enviar mensagem para servidor: {msg}')
+        criptogram, tag = self.encrypt_message(msg)
+        
+        self.digest.update(criptogram)
+        
+        json_message = {
+            "type" : type_,
+            "msg" : binascii.b2a_base64(criptogram).decode('latin').strip(),
+            "digest" : binascii.b2a_base64(self.digest.finalize()).decode('latin').strip()
+        }
+        
+        if self.chosen_algorithm == "ChaCha20":
+            json_message["nonce"] = binascii.b2a_base64(self.nonce).decode('latin').strip()
+        else:
+            json_message["iv"] = binascii.b2a_base64(self.iv).decode('latin').strip()
+                
+            if self.chosen_mode == "GCM":
+                json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
+                
+                    
+        req = self.send_to_server(f'{SERVER_URL}/api/msg', json_message)
+        
+        if req.status_code == 200:
+            return req.json()
+        else:
+            logger.error('Não houve json de resposta por parte do servidor')
+            
+    def msg_received(self, data):
+        if data['type'] == "sucess":
+            return self.decrypt_message(data)
+        elif data['type'] == "error":
+            return data['msg']
+            
+            
+            
+            
+            
+            
+            
         
 def main():
     print("|--------------------------------------|")

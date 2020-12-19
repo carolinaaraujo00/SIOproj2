@@ -68,30 +68,6 @@ class MediaServer(resource.Resource):
         self.public_key = None
         self.tag = None
         self.client_authorizations = set()
-        
-        
-    def get_communication_assets(self):
-        # derivar a chave partilhada de acordo com cifra utilizada
-        self.get_key()
-        
-        # inicializar o modo
-        self.get_mode()
-        
-        # inicializar a cifra
-        self.get_algorithm()
-        self.get_cipher()
-        
-        # encriptador
-        self.get_encryptor()
-        
-        # cifra = self.encryptor.update(b"a secret message") + self.encryptor.finalize()
-        # print(cifra)
-        
-        # decriptador
-        self.get_decryptor()
-        
-        # message = self.decryptor.update(cifra) + self.decryptor.finalize()
-        # print(message)
     
     def do_get_protocols(self, request):
         logger.debug(f'Client asked for protocols')
@@ -389,7 +365,12 @@ class MediaServer(resource.Resource):
     def do_list(self, request):
 
         data = request.getHeader('Authorization')
-        code = binascii.a2b_base64(data.encode('latin'))
+        data = json.loads(data)
+        
+        # TODO este código pode ser gerado a partir dum hmac
+        code = self.decrypt_message(data)
+        code = binascii.a2b_base64(code.encode('latin'))
+        
         if not code in self.client_authorizations:
            request.setResponseCode(401)
            return self.send_response(request, "error", {'error': 'Not authorized'})

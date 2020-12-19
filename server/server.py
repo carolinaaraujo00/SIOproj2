@@ -28,6 +28,23 @@ CATALOG = { '898a08080d1840793122b7e118b27a95d117ebce':
                 'duration': 3*60+33,
                 'file_name': '898a08080d1840793122b7e118b27a95d117ebce.mp3',
                 'file_size': 3407202
+            },
+            'Black Pumas - Colors' :
+                {
+                    'name' : 'Black Pumas - Colors',
+                    'album' : 'Colors',
+                    'description' : 'best music 2025',
+                    'duration' : 4*60+7,
+                    'file_name' : 'Black Pumas - Colors.mp3',
+                    'file_size' : 3947343
+                },
+            'ABBA - Mamma mia' : {
+                'name' : 'ABBA - Mamma Mia',
+                'album' : 'Album',
+                'description' : 'best music ever (segundo a Carolina) (cuja opiniao vale round(0)',
+                'duration' : 3*60+33,
+                'file_name' : 'mammamia.mp3',
+                'file_size' : 3394801
             }
         }
 
@@ -325,8 +342,8 @@ class MediaServer(resource.Resource):
     # Send the list of media files to clients
     def do_list(self, request):
 
-        #auth = request.getHeader('Authorization')
-        #if not auth:
+        # auth = request.getHeader('Authorization')
+        # if not auth:
         #    request.setResponseCode(401)
         #    return 'Not authorized'
 
@@ -334,6 +351,7 @@ class MediaServer(resource.Resource):
         # Build list
         media_list = []
         for media_id in CATALOG:
+            print(media_id)
             media = CATALOG[media_id]
             media_list.append({
                 'id': media_id,

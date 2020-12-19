@@ -8,6 +8,9 @@ import json
 import os
 import math
 
+from datetime import datetime
+import time
+
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -64,6 +67,7 @@ class MediaServer(resource.Resource):
         self.private_key = None
         self.public_key = None
         self.tag = None
+        self.client_authorizations = set()
         
         
     def get_communication_assets(self):
@@ -338,20 +342,62 @@ class MediaServer(resource.Resource):
                 json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
         
         return json.dumps(json_message).encode('latin')
+    
+    def authn_client(self, request):
+        data = request.content.getvalue()
+        data = json.loads(data.decode('latin'))
+        return self.license(request, self.decrypt_message(data))
+            
 
+    def license(self, request, client_identifier):
+        with open('licenses.json', 'r') as json_file:
+            licenses = json.loads(json_file.read())
+            
+        if client_identifier in licenses:
+            diff = datetime.fromtimestamp(time.time()) - datetime.fromisoformat(licenses[client_identifier]['timestamp'])
+            
+            # verificar se a licenca expirou
+            if diff.seconds/60 <= 30:
+                # tem uma licenca valida
+                logger.info(f'O cliente {client_identifier} tem licenca')
+                return self.send_response(request, "sucess", binascii.b2a_base64(self.gen_code()).decode('latin').strip())
+        
+        
+        """ TODO falta fazer a autenticacao do cliente """
+        
+            
+        # teria de emitir uma nova licenca
+        licenses[client_identifier] = {'timestamp' : datetime.fromtimestamp(time.time()).__str__()}
+        logger.info(f'Uma nova licenca foi criada para o cliente {client_identifier}')
+            
+        with open('licenses.json', 'w') as json_file:
+            json_file.write(json.dumps(licenses))
+                
+        return self.send_response(request, "sucess", binascii.b2a_base64(self.gen_code()).decode('latin').strip())
+    
+    def gen_code(self):
+        code = None
+        while True:
+            code = os.urandom(32)
+            if not code in self.client_authorizations:
+                break
+            
+        self.client_authorizations.add(code)
+        return code
+        
     # Send the list of media files to clients
     def do_list(self, request):
 
-        # auth = request.getHeader('Authorization')
-        # if not auth:
-        #    request.setResponseCode(401)
-        #    return 'Not authorized'
+        data = request.getHeader('Authorization')
+        code = binascii.a2b_base64(data.encode('latin'))
+        if not code in self.client_authorizations:
+           request.setResponseCode(401)
+           return self.send_response(request, "error", {'error': 'Not authorized'})
 
 
         # Build list
         media_list = []
         for media_id in CATALOG:
-            print(media_id)
             media = CATALOG[media_id]
             media_list.append({
                 'id': media_id,
@@ -462,6 +508,8 @@ class MediaServer(resource.Resource):
                 return self.dh_public_key(request)
             elif request.path == b'/api/msg':
                 return self.msg_received(request)
+            elif request.path == b'/api/authn':
+                return self.authn_client(request)
         
         except Exception as e:
             logger.exception(e)

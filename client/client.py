@@ -40,22 +40,17 @@ class Client():
         self.dhe() 
         
         # derivar a chave partilhada de acordo com cifra utilizada
-        
         self.get_key()
         
-        # response = self.send_msg("msg", {"carolina" : "ola orlando espero que esteja tudo bem obrigada por teres feito o trabalho todo", 
-                            #   "orlando" : "ser ou n ser eis a questao"})
-                
-        # dic_text = self.msg_received(response)
-        # logger.info(f'Resposta recebida do servidor: {dic_text}')
-        
-        # GCM(iv)
-        # associated_data = autor
-        # encryptor.authenticate_additional_data(associated_data)
-        # encryptor.tag
-        # GCM(iv, tag)
-        # decryptor.authenticate_additional_data(associated_data)        
-        
+        #
+        data = self.authn()
+        self.code = binascii.a2b_base64(self.decrypt_message(data).encode('latin'))
+        print(self.code)
+    
+    def authn(self):
+        username = input('\nusername: ')
+        return self.send_msg('auth', f'{SERVER_URL}/api/authn', username)
+
     def get_protocols_from_server(self):
         req_protocols = requests.get(f'{SERVER_URL}/api/protocols')
         if req_protocols.status_code == 200:
@@ -281,7 +276,7 @@ class Client():
             criptogram = criptogram[block_size:]
         return json.loads(text.decode('latin'))
         
-    def send_msg(self, type_, msg):
+    def send_msg(self, type_, url, msg):
         logger.info(f'A enviar mensagem para servidor: {msg}')
         criptogram, tag = self.encrypt_message(msg)
         
@@ -303,12 +298,12 @@ class Client():
                 json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
                 
                     
-        req = self.send_to_server(f'{SERVER_URL}/api/msg', json_message)
+        req = self.send_to_server(url, json_message)
         
         if req.status_code == 200:
             return req.json()
         else:
-            logger.error('Não houve json de resposta por parte do servidor')
+            logger.error('A resposta do servidor na foi ok')
             
     def check_integrity(self, msg, digest):
         self.get_digest()
@@ -321,17 +316,7 @@ class Client():
         
         return False 
             
-    def msg_received(self, data):
-        # if data['type'] == "data":
-        #     """ Testar erro de integridade """
-        #     # if not self.check_integrity(data['msg'][len(data['msg']) - 1], data['digest']):
-        #     if not self.check_integrity(data['msg'], data['digest']):
-        #         return 'Mensagem corrompida'
-        #     return self.decrypt_message(data)
-        # elif data['type'] == "error":
-        #     print(data)
-        #     return self.decrypt_message(data)['error']
-        
+    def msg_received(self, data):        
         if not self.check_integrity(data['msg'], data['digest']):
             return 'Mensagem corrompida'
         
@@ -351,10 +336,11 @@ def main():
     # Get a list of media files
     print("Contacting Server")
     
-    # TODO: Secure the session
+    # TODO: Secure the session "11.28.242.121"
     client = Client()
 
-    req = requests.get(f'{SERVER_URL}/api/list')
+    # TODO encriptar o codigo client.code
+    req = requests.get(f'{SERVER_URL}/api/list', headers={'Authorization' : binascii.b2a_base64(client.code).decode('latin').strip()})
     if req.status_code == 200:
         print("Got Server List")
     

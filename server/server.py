@@ -91,18 +91,21 @@ class MediaServer(resource.Resource):
         
     def dh_public_key(self, request):
         # colocar key_size a 2048
-        p = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF
-        g = 2
-
-        params_numbers = dh.DHParameterNumbers(p,g)
-        parameters = params_numbers.parameters(default_backend())
-        
-        # parameters = dh.generate_parameters(generator=2, key_size=1024, backend=default_backend())
-        private_key = parameters.generate_private_key()
+        # p = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF
+        # g = 2
         
         data = request.content.getvalue()
+        data = json.loads(data.decode('latin'))
+
+        params_numbers = dh.DHParameterNumbers(data['p'], data['g'])
+        self.dh_parameters = params_numbers.parameters(default_backend())
         
-        client_public_key = serialization.load_der_public_key(data, backend=default_backend())
+        # parameters = dh.generate_parameters(generator=2, key_size=1024, backend=default_backend())
+        private_key = self.dh_parameters.generate_private_key()
+        
+        client_pk_b = binascii.a2b_base64(data["pk"].encode('latin'))
+        
+        client_public_key = serialization.load_der_public_key(client_pk_b, backend=default_backend())
         
         self.public_key_dh = private_key.public_key().public_bytes(
             encoding=serialization.Encoding.DER,
@@ -118,6 +121,30 @@ class MediaServer(resource.Resource):
         self.get_key()
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         return json.dumps({"key" : binascii.b2a_base64(self.public_key_dh).decode('latin').strip()}, indent=4).encode('latin')
+    
+    def rotate_key(self, request):
+        data = request.content.getvalue()
+        data = json.loads(data.decode('latin'))
+        
+        private_key = self.dh_parameters.generate_private_key()
+        
+        client_pk_b = binascii.a2b_base64(data["pk"].encode('latin'))
+        
+        client_public_key = serialization.load_der_public_key(client_pk_b, backend=default_backend())
+        
+        self.public_key_dh = private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+        
+        self.shared_key = private_key.exchange(client_public_key)
+        
+        logger.debug(f'Succeded at rotating key')
+        
+        self.get_key()
+        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+        return json.dumps({"key" : binascii.b2a_base64(self.public_key_dh).decode('latin').strip()}, indent=4).encode('latin')
+        
         
     def get_key(self):
         if self.client_algorithm == 'AES' or self.client_algorithm == 'ChaCha20':
@@ -491,6 +518,8 @@ class MediaServer(resource.Resource):
                 return self.msg_received(request)
             elif request.path == b'/api/authn':
                 return self.authn_client(request)
+            elif request.path == b'/api/rotatekey':
+                return self.rotate_key(request)
         
         except Exception as e:
             logger.exception(e)

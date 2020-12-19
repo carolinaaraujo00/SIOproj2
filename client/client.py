@@ -45,7 +45,6 @@ class Client():
         #
         data = self.authn()
         self.code = binascii.a2b_base64(self.decrypt_message(data).encode('latin'))
-        print(self.code)
     
     def authn(self):
         username = input('\nusername: ')
@@ -105,18 +104,24 @@ class Client():
         g = 2
 
         params_numbers = dh.DHParameterNumbers(p,g)
-        parameters = params_numbers.parameters(default_backend())
+        self.dh_parameters = params_numbers.parameters(default_backend())
         
         # parameters = dh.generate_parameters(generator=2, key_size=1024, backend=default_backend())
-        private_key = parameters.generate_private_key()
+        private_key = self.dh_parameters.generate_private_key()
         public_key = private_key.public_key()
         
         data = public_key.public_bytes(
             encoding=serialization.Encoding.DER,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
+        
+        msg = {
+            "p" : p,
+            "g" : g,
+            "pk" : binascii.b2a_base64(data).decode('latin').strip()
+        }
         # enviar chave publica dh para o servidor        
-        request = self.send_to_server(f'{SERVER_URL}/api/dh_client_public_key', data, True)
+        request = self.send_to_server(f'{SERVER_URL}/api/dh_client_public_key', msg)
         server_public_key = binascii.a2b_base64(request.json()['key'].encode('latin'))
         
         server_public_key = serialization.load_der_public_key(server_public_key, backend=default_backend())
@@ -124,6 +129,26 @@ class Client():
         self.shared_key = private_key.exchange(server_public_key)
 
         logger.info('Shared Key created sucessfully')
+        
+    def rotate_key(self):
+        private_key = self.dh_parameters.generate_private_key()
+        public_key = private_key.public_key()
+        
+        data = public_key.public_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+        
+        msg = {"pk" : binascii.b2a_base64(data).decode('latin').strip()}
+        request = self.send_to_server(f'{SERVER_URL}/api/rotatekey', msg)
+        
+        server_public_key = binascii.a2b_base64(request.json()['key'].encode('latin'))
+        server_public_key = serialization.load_der_public_key(server_public_key, backend=default_backend())
+        
+        self.shared_key = private_key.exchange(server_public_key)
+        logger.info('Succeded at rotating key')
+        
+        self.get_key()
         
     def get_key(self):
         if self.chosen_algorithm == 'AES' or self.chosen_algorithm == 'ChaCha20':
@@ -276,6 +301,8 @@ class Client():
             criptogram = criptogram[block_size:]
         return json.loads(text.decode('latin'))
         
+        
+    # TODO mudar nome da funcao para ficar em conformidade com o facto de encriptar headers
     def send_msg(self, type_, url, msg):
         logger.info(f'A enviar mensagem para servidor: {msg}')
         criptogram, tag = self.encrypt_message(msg)
@@ -297,6 +324,9 @@ class Client():
             if self.chosen_mode == "GCM":
                 json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
                 
+        # retornar o dicionario caso se trate de encriptar um param do header http
+        if type_ == "header":
+            return json.dumps(json_message)
                     
         req = self.send_to_server(url, json_message)
         
@@ -340,7 +370,7 @@ def main():
     client = Client()
 
     # TODO encriptar o codigo client.code
-    req = requests.get(f'{SERVER_URL}/api/list', headers={'Authorization' : binascii.b2a_base64(client.code).decode('latin').strip()})
+    req = requests.get(f'{SERVER_URL}/api/list', headers={'Authorization' : client.send_msg("header", None, binascii.b2a_base64(client.code).decode('latin').strip())})
     if req.status_code == 200:
         print("Got Server List")
     
@@ -381,12 +411,14 @@ def main():
 
     # Get data from server and send it to the ffplay stdin through a pipe
     for chunk in range(media_item['chunks'] + 1):
+        # rodar chave a cada 10 chunks
+        if chunk%10 == 0:
+            client.rotate_key()
+        
         req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}')
 
         chunk = client.msg_received(req.json())
-    
-        # TODO: Process chunk
-
+            
         try:
             data = binascii.a2b_base64(chunk['data'].encode('latin'))
             proc.stdin.write(data)

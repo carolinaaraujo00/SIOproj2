@@ -98,10 +98,10 @@ class MediaServer(resource.Resource):
         data = json.loads(data.decode('latin'))
 
         params_numbers = dh.DHParameterNumbers(data['p'], data['g'])
-        parameters = params_numbers.parameters(default_backend())
+        self.dh_parameters = params_numbers.parameters(default_backend())
         
         # parameters = dh.generate_parameters(generator=2, key_size=1024, backend=default_backend())
-        private_key = parameters.generate_private_key()
+        private_key = self.dh_parameters.generate_private_key()
         
         client_pk_b = binascii.a2b_base64(data["pk"].encode('latin'))
         
@@ -121,6 +121,30 @@ class MediaServer(resource.Resource):
         self.get_key()
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         return json.dumps({"key" : binascii.b2a_base64(self.public_key_dh).decode('latin').strip()}, indent=4).encode('latin')
+    
+    def rotate_key(self, request):
+        data = request.content.getvalue()
+        data = json.loads(data.decode('latin'))
+        
+        private_key = self.dh_parameters.generate_private_key()
+        
+        client_pk_b = binascii.a2b_base64(data["pk"].encode('latin'))
+        
+        client_public_key = serialization.load_der_public_key(client_pk_b, backend=default_backend())
+        
+        self.public_key_dh = private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+        
+        self.shared_key = private_key.exchange(client_public_key)
+        
+        logger.debug(f'Succeded at rotating key')
+        
+        self.get_key()
+        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+        return json.dumps({"key" : binascii.b2a_base64(self.public_key_dh).decode('latin').strip()}, indent=4).encode('latin')
+        
         
     def get_key(self):
         if self.client_algorithm == 'AES' or self.client_algorithm == 'ChaCha20':
@@ -494,6 +518,8 @@ class MediaServer(resource.Resource):
                 return self.msg_received(request)
             elif request.path == b'/api/authn':
                 return self.authn_client(request)
+            elif request.path == b'/api/rotatekey':
+                return self.rotate_key(request)
         
         except Exception as e:
             logger.exception(e)

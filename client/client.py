@@ -45,7 +45,6 @@ class Client():
         #
         data = self.authn()
         self.code = binascii.a2b_base64(self.decrypt_message(data).encode('latin'))
-        print(self.code)
     
     def authn(self):
         username = input('\nusername: ')
@@ -115,8 +114,14 @@ class Client():
             encoding=serialization.Encoding.DER,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
+        
+        msg = {
+            "p" : p,
+            "g" : g,
+            "pk" : binascii.b2a_base64(data).decode('latin').strip()
+        }
         # enviar chave publica dh para o servidor        
-        request = self.send_to_server(f'{SERVER_URL}/api/dh_client_public_key', data, True)
+        request = self.send_to_server(f'{SERVER_URL}/api/dh_client_public_key', msg)
         server_public_key = binascii.a2b_base64(request.json()['key'].encode('latin'))
         
         server_public_key = serialization.load_der_public_key(server_public_key, backend=default_backend())
@@ -276,6 +281,8 @@ class Client():
             criptogram = criptogram[block_size:]
         return json.loads(text.decode('latin'))
         
+        
+    # TODO mudar nome da funcao para ficar em conformidade com o facto de encriptar headers
     def send_msg(self, type_, url, msg):
         logger.info(f'A enviar mensagem para servidor: {msg}')
         criptogram, tag = self.encrypt_message(msg)
@@ -297,6 +304,9 @@ class Client():
             if self.chosen_mode == "GCM":
                 json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
                 
+        # retornar o dicionario caso se trate de encriptar um param do header http
+        if type_ == "header":
+            return json.dumps(json_message)
                     
         req = self.send_to_server(url, json_message)
         
@@ -340,7 +350,7 @@ def main():
     client = Client()
 
     # TODO encriptar o codigo client.code
-    req = requests.get(f'{SERVER_URL}/api/list', headers={'Authorization' : binascii.b2a_base64(client.code).decode('latin').strip()})
+    req = requests.get(f'{SERVER_URL}/api/list', headers={'Authorization' : client.send_msg("header", None, binascii.b2a_base64(client.code).decode('latin').strip())})
     if req.status_code == 200:
         print("Got Server List")
     

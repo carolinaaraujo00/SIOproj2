@@ -24,7 +24,7 @@ SERVER_URL = 'http://127.0.0.1:8080'
 
 ALGORITHMS = ['AES', 'ChaCha20', '3DES']
 MODES = ['CBC', 'OFB', 'CFB', 'GCM']
-DIGEST = ['SHA256', 'SHA512', 'SHA1', 'MD5']
+DIGEST = ['SHA256', 'SHA512', 'BLAKE2b', 'SHA3_256', 'SHA3_512']
 
 class Client():
     def __init__(self):
@@ -40,22 +40,17 @@ class Client():
         self.dhe() 
         
         # derivar a chave partilhada de acordo com cifra utilizada
-        
         self.get_key()
         
-        response = self.send_msg("msg", {"carolina" : "ola orlando espero que esteja tudo bem obrigada por teres feito o trabalho todo", 
-                              "orlando" : "ser ou n ser eis a questao"})
-                
-        dic_text = self.msg_received(response)
-        logger.info(f'Resposta recebida do servidor: {dic_text}')
-        
-        # GCM(iv)
-        # associated_data = autor
-        # encryptor.authenticate_additional_data(associated_data)
-        # encryptor.tag
-        # GCM(iv, tag)
-        # decryptor.authenticate_additional_data(associated_data)        
-        
+        #
+        data = self.authn()
+        self.code = binascii.a2b_base64(self.decrypt_message(data).encode('latin'))
+        print(self.code)
+    
+    def authn(self):
+        username = input('\nusername: ')
+        return self.send_msg('auth', f'{SERVER_URL}/api/authn', username)
+
     def get_protocols_from_server(self):
         req_protocols = requests.get(f'{SERVER_URL}/api/protocols')
         if req_protocols.status_code == 200:
@@ -77,10 +72,7 @@ class Client():
             self.chosen_mode = self.choose_cycle('What mode would you like to use? ', matching_modes)
         
         self.chosen_digest = self.choose_cycle('What digest would you like to use? ', matching_digests)
-        
-        # TODO retirar daqui pq secalhar n é a melhor solucao
-        self.get_digest()
-        
+                
         logger.info(f'Protocols chosen:\n\tAlgorithm: {self.chosen_algorithm}\n\tMode: {self.chosen_mode}\n\tDigest: {self.chosen_digest}')
         return {'algorithm' : self.chosen_algorithm, 'mode' : self.chosen_mode, 'digest' : self.chosen_digest}
     
@@ -108,6 +100,7 @@ class Client():
         return requests.post(uri, data = json.dumps(msg, indent=4).encode('latin'))
         
     def dhe(self):
+        # o p e g sao para serem mandados para o servidor (?)
         p = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF
         g = 2
 
@@ -283,10 +276,11 @@ class Client():
             criptogram = criptogram[block_size:]
         return json.loads(text.decode('latin'))
         
-    def send_msg(self, type_, msg):
+    def send_msg(self, type_, url, msg):
         logger.info(f'A enviar mensagem para servidor: {msg}')
         criptogram, tag = self.encrypt_message(msg)
         
+        self.get_digest()
         self.digest.update(criptogram)
         
         json_message = {
@@ -304,26 +298,36 @@ class Client():
                 json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
                 
                     
-        req = self.send_to_server(f'{SERVER_URL}/api/msg', json_message)
+        req = self.send_to_server(url, json_message)
         
         if req.status_code == 200:
             return req.json()
         else:
-            logger.error('Não houve json de resposta por parte do servidor')
+            logger.error('A resposta do servidor na foi ok')
             
-    def msg_received(self, data):
-        if data['type'] == "sucess":
+    def check_integrity(self, msg, digest):
+        self.get_digest()
+        self.digest.update(binascii.a2b_base64(msg.encode('latin')))
+
+        if binascii.a2b_base64(digest.encode('latin')) == self.digest.finalize():
+            logger.info("A mensagem chegou sem problemas :)")
+            return True
+        logger.error("A mensagem foi corrompida a meio do caminho.")
+        
+        return False 
+            
+    def msg_received(self, data):        
+        if not self.check_integrity(data['msg'], data['digest']):
+            return 'Mensagem corrompida'
+        
+        if data['type'] == "data":
             return self.decrypt_message(data)
         elif data['type'] == "error":
-            return data['msg']
-            
-            
-            
-            
-            
-            
-            
+            return self.decrypt_message(data)['error']
+        else:
+            return f'Recebi um tipo de dados desconhecido: {data}'
         
+    
 def main():
     print("|--------------------------------------|")
     print("|         SECURE MEDIA CLIENT          |")
@@ -332,19 +336,21 @@ def main():
     # Get a list of media files
     print("Contacting Server")
     
-    # TODO: Secure the session
+    # TODO: Secure the session "11.28.242.121"
+    client = Client()
 
-    req = requests.get(f'{SERVER_URL}/api/list')
+    # TODO encriptar o codigo client.code
+    req = requests.get(f'{SERVER_URL}/api/list', headers={'Authorization' : binascii.b2a_base64(client.code).decode('latin').strip()})
     if req.status_code == 200:
         print("Got Server List")
-        
-    media_list = req.json()
+    
+    media_list = client.msg_received(req.json())
+    
 
     # Present a simple selection menu    
-    idx = 0
     print("MEDIA CATALOG\n")
-    for item in media_list:
-        print(f'{idx} - {media_list[idx]["name"]}')
+    for i, item in enumerate(media_list):
+        print(f'{i} - {item["name"]}')
     print("----")
 
 
@@ -360,6 +366,7 @@ def main():
         if 0 <= selection < len(media_list):
             break
 
+    
     # Example: Download first file
     media_item = media_list[selection]
     print(f"Playing {media_item['name']}")
@@ -375,18 +382,19 @@ def main():
     # Get data from server and send it to the ffplay stdin through a pipe
     for chunk in range(media_item['chunks'] + 1):
         req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}')
-        chunk = req.json()
-       
+
+        chunk = client.msg_received(req.json())
+    
         # TODO: Process chunk
 
-        data = binascii.a2b_base64(chunk['data'].encode('latin'))
         try:
+            data = binascii.a2b_base64(chunk['data'].encode('latin'))
             proc.stdin.write(data)
         except:
             break
+    
         
 if __name__ == '__main__':
-    client = Client()
-    # while True:
-    #     main()
-    #     time.sleep(1)
+    while True:
+        main()
+        time.sleep(1)

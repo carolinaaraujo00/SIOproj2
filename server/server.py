@@ -8,6 +8,9 @@ import json
 import os
 import math
 
+from datetime import datetime
+import time
+
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -28,6 +31,23 @@ CATALOG = { '898a08080d1840793122b7e118b27a95d117ebce':
                 'duration': 3*60+33,
                 'file_name': '898a08080d1840793122b7e118b27a95d117ebce.mp3',
                 'file_size': 3407202
+            },
+            'Black Pumas - Colors' :
+                {
+                    'name' : 'Black Pumas - Colors',
+                    'album' : 'Colors',
+                    'description' : 'best music 2025',
+                    'duration' : 4*60+7,
+                    'file_name' : 'Black Pumas - Colors.mp3',
+                    'file_size' : 3947343
+                },
+            'ABBA - Mamma mia' : {
+                'name' : 'ABBA - Mamma Mia',
+                'album' : 'Album',
+                'description' : 'best music ever (segundo a Carolina) (cuja opiniao vale round(0)',
+                'duration' : 3*60+33,
+                'file_name' : 'mammamia.mp3',
+                'file_size' : 3394801
             }
         }
 
@@ -47,30 +67,7 @@ class MediaServer(resource.Resource):
         self.private_key = None
         self.public_key = None
         self.tag = None
-        
-        
-    def get_communication_assets(self):
-        # derivar a chave partilhada de acordo com cifra utilizada
-        self.get_key()
-        
-        # inicializar o modo
-        self.get_mode()
-        
-        # inicializar a cifra
-        self.get_algorithm()
-        self.get_cipher()
-        
-        # encriptador
-        self.get_encryptor()
-        
-        # cifra = self.encryptor.update(b"a secret message") + self.encryptor.finalize()
-        # print(cifra)
-        
-        # decriptador
-        self.get_decryptor()
-        
-        # message = self.decryptor.update(cifra) + self.decryptor.finalize()
-        # print(message)
+        self.client_authorizations = set()
     
     def do_get_protocols(self, request):
         logger.debug(f'Client asked for protocols')
@@ -89,10 +86,7 @@ class MediaServer(resource.Resource):
         self.client_algorithm = data['algorithm']
         self.client_mode = data['mode']
         self.client_digest = data['digest']
-        
-        # TODO talvez remover digest deste metodo
-        self.get_digest()
-        
+                
         logger.info(f'Client protocols: Cipher:{self.client_algorithm}; Mode:{self.client_mode}; Digest:{self.client_digest}')
         
     def dh_public_key(self, request):
@@ -272,7 +266,8 @@ class MediaServer(resource.Resource):
         
         return cripto, ""
     
-    def check_integrity(self, msg, digest):        
+    def check_integrity(self, msg, digest):
+        self.get_digest()
         self.digest.update(binascii.a2b_base64(msg.encode('latin')))
 
         if binascii.a2b_base64(digest.encode('latin')) == self.digest.finalize():
@@ -285,62 +280,100 @@ class MediaServer(resource.Resource):
         data = request.content.getvalue()
         data = json.loads(data.decode('latin'))
         
+        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+        
         if data['type'] == 'msg':
             if not self.check_integrity(data['msg'], data['digest']):
-                return self.send_response(request, {'type' : 'error', 'msg' : "manda essa merda de novo brow"})
-
+                return self.send_response(request, "error", {'error' : "manda isso de novo brow"})
+                
             dic_text = self.decrypt_message(data)
             logger.info(f'Mensagem recebida: {dic_text}')
             
             msg = {"msg" : "A mensagem foi recebida brow."}
-            logger.info(f'A enviar resposta para cliente: {msg["msg"]}')
             
-            cripto, tag = self.encrypt_message(msg)
-            
-            json_message = {"type" : "sucess", "msg" : binascii.b2a_base64(cripto).decode('latin').strip()}
-            
-            if self.client_algorithm == "ChaCha20":
-                json_message["nonce"] = binascii.b2a_base64(self.nonce).decode('latin').strip()
-            else:
-                json_message["iv"] = binascii.b2a_base64(self.iv).decode('latin').strip()
-                    
-                if self.client_mode == "GCM":
-                    json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
-                                    
-            return self.send_response(request, json_message)
+            return self.send_response(request, msg)
         
     
-    def send_response(self, request, resp):
-        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+    def send_response(self, request, type_, resp):
         
-        return json.dumps(resp).encode('latin')
+        # logger.info(f'A enviar resposta para cliente: {resp}')
+            
+        cripto, tag = self.encrypt_message(resp)
+        
+        self.get_digest()
+        self.digest.update(cripto)
+        
+        json_message = {
+                    "type" : type_,
+                    "msg" : binascii.b2a_base64(cripto).decode('latin').strip(),
+                    "digest" : binascii.b2a_base64(self.digest.finalize()).decode('latin').strip()
+                    }
+        
+        if self.client_algorithm == "ChaCha20":
+            json_message["nonce"] = binascii.b2a_base64(self.nonce).decode('latin').strip()
+        else:
+            json_message["iv"] = binascii.b2a_base64(self.iv).decode('latin').strip()
+                
+            if self.client_mode == "GCM":
+                json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
+        
+        return json.dumps(json_message).encode('latin')
     
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+    def authn_client(self, request):
+        data = request.content.getvalue()
+        data = json.loads(data.decode('latin'))
+        return self.license(request, self.decrypt_message(data))
+            
 
+    def license(self, request, client_identifier):
+        with open('licenses.json', 'r') as json_file:
+            licenses = json.loads(json_file.read())
+            
+        if client_identifier in licenses:
+            diff = datetime.fromtimestamp(time.time()) - datetime.fromisoformat(licenses[client_identifier]['timestamp'])
+            
+            # verificar se a licenca expirou
+            if diff.seconds/60 <= 30:
+                # tem uma licenca valida
+                logger.info(f'O cliente {client_identifier} tem licenca')
+                return self.send_response(request, "sucess", binascii.b2a_base64(self.gen_code()).decode('latin').strip())
+        
+        
+        """ TODO falta fazer a autenticacao do cliente """
+        
+            
+        # teria de emitir uma nova licenca
+        licenses[client_identifier] = {'timestamp' : datetime.fromtimestamp(time.time()).__str__()}
+        logger.info(f'Uma nova licenca foi criada para o cliente {client_identifier}')
+            
+        with open('licenses.json', 'w') as json_file:
+            json_file.write(json.dumps(licenses))
+                
+        return self.send_response(request, "sucess", binascii.b2a_base64(self.gen_code()).decode('latin').strip())
+    
+    def gen_code(self):
+        code = None
+        while True:
+            code = os.urandom(32)
+            if not code in self.client_authorizations:
+                break
+            
+        self.client_authorizations.add(code)
+        return code
+        
     # Send the list of media files to clients
     def do_list(self, request):
 
-        #auth = request.getHeader('Authorization')
-        #if not auth:
-        #    request.setResponseCode(401)
-        #    return 'Not authorized'
+        data = request.getHeader('Authorization')
+        data = json.loads(data)
+        
+        # TODO este código pode ser gerado a partir dum hmac
+        code = self.decrypt_message(data)
+        code = binascii.a2b_base64(code.encode('latin'))
+        
+        if not code in self.client_authorizations:
+           request.setResponseCode(401)
+           return self.send_response(request, "error", {'error': 'Not authorized'})
 
 
         # Build list
@@ -356,8 +389,8 @@ class MediaServer(resource.Resource):
                 })
 
         # Return list to client
-        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        return json.dumps(media_list, indent=4).encode('latin')
+        # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+        return self.send_response(request, "data", media_list)
 
 
     # Send a media chunk to the client
@@ -370,8 +403,7 @@ class MediaServer(resource.Resource):
         # Check if the media_id is not None as it is required
         if media_id is None:
             request.setResponseCode(400)
-            request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-            return json.dumps({'error': 'invalid media id'}).encode('latin')
+            return self.send_response(request, "error", {'error': 'invalid media id'})
         
         # Convert bytes to str
         media_id = media_id.decode('latin')
@@ -379,8 +411,7 @@ class MediaServer(resource.Resource):
         # Search media_id in the catalog
         if media_id not in CATALOG:
             request.setResponseCode(404)
-            request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-            return json.dumps({'error': 'media file not found'}).encode('latin')
+            return self.send_response(request, "error", {'error': 'media file not found'})
         
         # Get the media item
         media_item = CATALOG[media_id]
@@ -397,9 +428,8 @@ class MediaServer(resource.Resource):
 
         if not valid_chunk:
             request.setResponseCode(400)
-            request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-            return json.dumps({'error': 'invalid chunk id'}).encode('latin')
-            
+            return self.send_response(request, "error", {'error': 'invalid chunk id'})
+                        
         logger.debug(f'Download: chunk: {chunk_id}')
 
         offset = chunk_id * CHUNK_SIZE
@@ -409,19 +439,16 @@ class MediaServer(resource.Resource):
             f.seek(offset)
             data = f.read(CHUNK_SIZE)
 
-            request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-            return json.dumps(
-                    {
-                        'media_id': media_id, 
-                        'chunk': chunk_id, 
-                        'data': binascii.b2a_base64(data).decode('latin').strip()
-                    },indent=4
-                ).encode('latin')
+            # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+            return self.send_response(request, "data", {
+                'media_id': media_id,
+                'chunk': chunk_id,
+                'data': binascii.b2a_base64(data).decode('latin').strip()
+            })
 
         # File was not open?
-        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        return json.dumps({'error': 'unknown'}, indent=4).encode('latin')
-        
+        return self.send_response(request, "error", {'error': 'unknown'})
+                
     # Handle a GET request
     def render_GET(self, request):
         logger.debug(f'Received request for {request.uri}')
@@ -438,9 +465,9 @@ class MediaServer(resource.Resource):
 
             elif request.path == b'/api/download':
                 return self.do_download(request)
-            elif request.path == b'/api/get_public_key_dh':
-                request.responseHeaders.addRawHeader(b"content-type", b'application/json')
-                return json.dumps(binascii.b2a_base64(self.public_key_dh).decode('latin').strip(), indent=4).encode('latin')
+            # elif request.path == b'/api/get_public_key_dh':
+            #     request.responseHeaders.addRawHeader(b"content-type", b'application/json')
+            #     return json.dumps(binascii.b2a_base64(self.public_key_dh).decode('latin').strip(), indent=4).encode('latin')
 
             else:
                 request.responseHeaders.addRawHeader(b"content-type", b'text/plain')
@@ -462,6 +489,8 @@ class MediaServer(resource.Resource):
                 return self.dh_public_key(request)
             elif request.path == b'/api/msg':
                 return self.msg_received(request)
+            elif request.path == b'/api/authn':
+                return self.authn_client(request)
         
         except Exception as e:
             logger.exception(e)

@@ -14,6 +14,8 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography import x509
+from cryptography.hazmat.primitives.asymmetric import padding
 
 logger = logging.getLogger('root')
 FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
@@ -28,6 +30,13 @@ DIGEST = ['SHA256', 'SHA512', 'BLAKE2b', 'SHA3_256', 'SHA3_512']
 
 class Client():
     def __init__(self):
+        
+        if not self.trust_server():
+            logger.error('Certificate of http server is not trusted')
+            sys.exit(1)
+            
+        logger.info('Certificate of http server is trusted')
+        
         self.tag = None
         self.chosen_mode = None
         self.server_protocols = self.get_protocols_from_server()
@@ -42,10 +51,11 @@ class Client():
         # derivar a chave partilhada de acordo com cifra utilizada
         self.get_key()
         
-        #
         data = self.authn()
         self.code = binascii.a2b_base64(self.decrypt_message(data).encode('latin'))
+        
     
+    # TODO alterar
     def authn(self):
         username = input('\nusername: ')
         return self.send_msg('auth', f'{SERVER_URL}/api/authn', username)
@@ -93,20 +103,30 @@ class Client():
         print('###############################')            
         return list_[selection]
         
-    def send_to_server(self, uri ,msg, bytes_=False):
+    def send_to_server(self, uri, msg, bytes_=False):
+        
         if bytes_:
-            return requests.post(uri, data = msg)
-        return requests.post(uri, data = json.dumps(msg, indent=4).encode('latin'))
+            data = msg
+        else:
+            data = json.dumps(msg, indent=4).encode('latin')
+        
+        ass_msg = self.cert.public_key().encrypt(data, 
+                    padding = padding.OAEP(
+                        mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                        algorithm=hashes.SHA256(),
+                        label=None
+                    )
+                )
+        
+        return requests.post(uri, data = ass_msg)
         
     def dhe(self):
-        # o p e g sao para serem mandados para o servidor (?)
         p = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF
         g = 2
 
         params_numbers = dh.DHParameterNumbers(p,g)
         self.dh_parameters = params_numbers.parameters(default_backend())
         
-        # parameters = dh.generate_parameters(generator=2, key_size=1024, backend=default_backend())
         private_key = self.dh_parameters.generate_private_key()
         public_key = private_key.public_key()
         
@@ -157,7 +177,7 @@ class Client():
             self.key = self.derive_shared_key(hashes.SHA256(), 24, None, b'handshake data')
         
     def derive_shared_key(self, algorithm, length, salt, info):
-        # utilizar PBKDF2HMAC talvez seja mais seguro
+        # TODO utilizar PBKDF2HMAC talvez seja mais seguro
         derived_key = HKDF(
             algorithm=algorithm,
             length=length,
@@ -357,6 +377,29 @@ class Client():
         else:
             return f'Recebi um tipo de dados desconhecido: {data}'
         
+    """ Proj3 """
+    
+    def trust_server(self):
+        response = requests.get(f'{SERVER_URL}/api/cert')
+        cert = binascii.a2b_base64(response.json()['cert'].encode('latin'))
+        self.cert = x509.load_pem_x509_certificate(cert, backend = default_backend())
+
+        # TODO fazer corrente de CA's
+        for c in self.trusted_ca():
+            if self.cert.issuer == c.subject:
+                return True
+        
+        return False
+
+    def trusted_ca(self):
+        ret = []
+        for f in os.scandir('./trusted_ca'):
+            with open(f.path, 'rb') as file_:
+                ret.append(x509.load_pem_x509_certificate(file_.read(), backend = default_backend()))
+                
+        return ret
+        
+        
     
 def main():
     print("|--------------------------------------|")
@@ -427,6 +470,7 @@ def main():
     
         
 if __name__ == '__main__':
-    while True:
-        main()
-        time.sleep(1)
+    app = Client()
+    # while True:
+    #     main()
+    #     time.sleep(1)

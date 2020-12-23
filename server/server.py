@@ -17,6 +17,8 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import padding
 
 logger = logging.getLogger('root')
 FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
@@ -64,10 +66,19 @@ class MediaServer(resource.Resource):
         self.client_cipher = None
         self.client_mode = None
         self.client_digest = None
-        self.private_key = None
         self.public_key = None
         self.tag = None
         self.client_authorizations = set()
+        
+        self.private_key = self.get_private_key()
+        
+    def get_private_key(self):
+        with open('certificate/SIO_ServerPK.pem', 'rb') as f:
+            return serialization.load_pem_private_key(
+                f.read(), 
+                password = None,
+                backend = default_backend()
+            )
     
     def do_get_protocols(self, request):
         logger.debug(f'Client asked for protocols')
@@ -79,28 +90,17 @@ class MediaServer(resource.Resource):
             },indent=4
         ).encode('latin')
     
-    def client_protocols(self, request):
-        data = request.content.getvalue()
-        data = json.loads(data)
-
+    def client_protocols(self, request, data):
         self.client_algorithm = data['algorithm']
         self.client_mode = data['mode']
         self.client_digest = data['digest']
                 
         logger.info(f'Client protocols: Cipher:{self.client_algorithm}; Mode:{self.client_mode}; Digest:{self.client_digest}')
         
-    def dh_public_key(self, request):
-        # colocar key_size a 2048
-        # p = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF
-        # g = 2
-        
-        data = request.content.getvalue()
-        data = json.loads(data.decode('latin'))
-
+    def dh_public_key(self, request, data):
         params_numbers = dh.DHParameterNumbers(data['p'], data['g'])
         self.dh_parameters = params_numbers.parameters(default_backend())
         
-        # parameters = dh.generate_parameters(generator=2, key_size=1024, backend=default_backend())
         private_key = self.dh_parameters.generate_private_key()
         
         client_pk_b = binascii.a2b_base64(data["pk"].encode('latin'))
@@ -122,10 +122,7 @@ class MediaServer(resource.Resource):
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         return json.dumps({"key" : binascii.b2a_base64(self.public_key_dh).decode('latin').strip()}, indent=4).encode('latin')
     
-    def rotate_key(self, request):
-        data = request.content.getvalue()
-        data = json.loads(data.decode('latin'))
-        
+    def rotate_key(self, request, data):
         private_key = self.dh_parameters.generate_private_key()
         
         client_pk_b = binascii.a2b_base64(data["pk"].encode('latin'))
@@ -215,8 +212,6 @@ class MediaServer(resource.Resource):
             self.digest = hashes.Hash(hashes.SHA3_256())
         elif self.client_digest == 'SHA3_512':
             self.digest = hashes.Hash(hashes.SHA3_512())
-        
-    def block_size(self):
         if self.client_algorithm == '3DES':
             return 8
         return 16
@@ -293,6 +288,7 @@ class MediaServer(resource.Resource):
         
         return cripto, ""
     
+    # TODO alterar
     def check_integrity(self, msg, digest):
         self.get_digest()
         self.digest.update(binascii.a2b_base64(msg.encode('latin')))
@@ -303,20 +299,17 @@ class MediaServer(resource.Resource):
         logger.error("A mensagem foi corrompida a meio do caminho.")
         return False 
 
-    def msg_received(self, request):
-        data = request.content.getvalue()
-        data = json.loads(data.decode('latin'))
-        
+    def msg_received(self, request, data):
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         
         if data['type'] == 'msg':
             if not self.check_integrity(data['msg'], data['digest']):
-                return self.send_response(request, "error", {'error' : "manda isso de novo brow"})
+                return self.send_response(request, "error", {'error' : "Corrupted message."})
                 
             dic_text = self.decrypt_message(data)
             logger.info(f'Mensagem recebida: {dic_text}')
             
-            msg = {"msg" : "A mensagem foi recebida brow."}
+            msg = {"msg" : "Message is ok."}
             
             return self.send_response(request, msg)
         
@@ -419,6 +412,12 @@ class MediaServer(resource.Resource):
         # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         return self.send_response(request, "data", media_list)
 
+    """ Proj3 """
+    def cert(self, request):
+        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+        
+        with open('certificate/SIO_Server.crt', 'rb') as file:
+            return json.dumps({'cert' : binascii.b2a_base64(file.read()).decode('latin').strip()}, indent=4).encode('latin')
 
     # Send a media chunk to the client
     def do_download(self, request):
@@ -479,17 +478,14 @@ class MediaServer(resource.Resource):
     # Handle a GET request
     def render_GET(self, request):
         logger.debug(f'Received request for {request.uri}')
-
+        # TODO informação sensível deve ir por POST
         try:
             if request.path == b'/api/protocols':
                 return self.do_get_protocols(request)
-            #elif request.uri == 'api/key':
-            #...
-            #elif request.uri == 'api/auth':
-
+            elif request.path == b'/api/cert':
+                return self.cert(request)
             elif request.path == b'/api/list':
                 return self.do_list(request)
-
             elif request.path == b'/api/download':
                 return self.do_download(request)
             # elif request.path == b'/api/get_public_key_dh':
@@ -509,17 +505,27 @@ class MediaServer(resource.Resource):
     # Handle a POST request
     def render_POST(self, request):
         logger.debug(f'Received POST for {request.uri}')
-        try: 
+        try:
+            content = request.content.getvalue()
+            ass_data = self.private_key.decrypt(content,
+                                            padding = padding.OAEP(
+                                            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                                            algorithm=hashes.SHA256(),
+                                            label=None
+                                            )
+                                        )
+            data = json.loads(ass_data.decode('latin'))
+            
             if request.path == b'/api/protocol_choice':
-                self.client_protocols(request)
+                self.client_protocols(request, data)
             elif request.path == b'/api/dh_client_public_key':
-                return self.dh_public_key(request)
+                return self.dh_public_key(request, data)
             elif request.path == b'/api/msg':
-                return self.msg_received(request)
+                return self.msg_received(request, data)
             elif request.path == b'/api/authn':
-                return self.authn_client(request)
+                return self.authn_client(request, data)
             elif request.path == b'/api/rotatekey':
-                return self.rotate_key(request)
+                return self.rotate_key(request, data)
         
         except Exception as e:
             logger.exception(e)

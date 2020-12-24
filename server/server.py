@@ -386,7 +386,7 @@ class MediaServer(resource.Resource):
         self.client_authorizations.add(code)
         return code
         
-    """ Proj3 """
+    """ Proj3 o orlanod cheira mal"""
     def cert(self, request):
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         

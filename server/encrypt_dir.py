@@ -42,7 +42,7 @@ class DirEncript:
         
     def encrypt_file(self, file_name, text):
         with open(file_name, 'wb') as f:
-            f.write(text)
+            f.write(self.encrypt(text))
         
 
     def encrypt(self, data):

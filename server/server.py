@@ -429,7 +429,7 @@ class MediaServer(resource.Resource):
 
         # Return list to client
         # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        return self.send_response(request, "data", media_list)
+        return self.send_response(request, "data_list", media_list)
 
     # Send a media chunk to the client
     def do_download(self, request):
@@ -490,14 +490,25 @@ class MediaServer(resource.Resource):
             data = f.read(CHUNK_SIZE)
 
             # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-            return self.send_response(request, "data", {
+            return self.send_response(request, "data_download", {
                 'media_id': media_id,
                 'chunk': chunk_id,
-                'data': binascii.b2a_base64(data).decode('latin').strip()
+                'data': binascii.b2a_base64(data).decode('latin').strip(),
+                'signature' : binascii.b2a_base64(self.sign_chunk(data)).decode('latin').strip() # dá para assinar porque o tamanho da chunk é inferior ao tamanho da key
             })
 
         # File was not open?
         return self.send_response(request, "error", {'error': 'unknown'})
+    
+    def sign_chunk(self, data):
+        return self.private_key.sign(
+            data,
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH
+            ),
+            hashes.SHA256()
+        )
                 
     # Handle a GET request
     def render_GET(self, request):

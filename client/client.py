@@ -16,6 +16,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.exceptions import InvalidSignature
 
 logger = logging.getLogger('root')
 FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
@@ -371,8 +372,15 @@ class Client():
         if not self.check_integrity(data['msg'], data['digest']):
             return 'Mensagem corrompida'
         
-        if data['type'] == "data":
+        if data['type'] == "data_list":
             return self.decrypt_message(data)
+        elif data['type'] == 'data_download':
+            data = self.decrypt_message(data)
+            
+            # verificar a assinatura
+            if not self.verify_chunk(binascii.a2b_base64(data['data'].encode('latin')), binascii.a2b_base64(data['signature'].encode('latin'))):
+                return None
+            return data
         elif data['type'] == "error":
             return self.decrypt_message(data)['error']
         else:
@@ -399,6 +407,23 @@ class Client():
                 ret.append(x509.load_pem_x509_certificate(file_.read(), backend = default_backend()))
                 
         return ret
+    
+    def verify_chunk(self, data, signature):
+        try:
+            self.cert.public_key().verify(
+                signature,
+                data,
+                padding.PSS(
+                    mgf=padding.MGF1(hashes.SHA256()),
+                    salt_length=padding.PSS.MAX_LENGTH
+                ),
+                hashes.SHA256()
+            )
+        except InvalidSignature:
+            logger.error('Signature of chunk not valid')
+            return False
+        
+        return True
         
         
     
@@ -468,7 +493,7 @@ def main():
             break
         
         chunk = client.msg_received(req.json())
-            
+        
         try:
             data = binascii.a2b_base64(chunk['data'].encode('latin'))
             proc.stdin.write(data)

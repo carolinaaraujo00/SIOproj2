@@ -1,16 +1,12 @@
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
-from os import scandir
+from os import scandir, urandom
 
 class DirEncript:
     def __init__(self, key, iv):
-        # self.key = key 32 bytes
-        # self.iv = iv 16
         cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
         self.encryptor = cipher.encryptor()
         self.decryptor = cipher.decryptor()
-
-        self.encrypt_files()
         
     # encriptar todos os ficheiros
     def encrypt_files(self):
@@ -18,6 +14,7 @@ class DirEncript:
         files.extend([f.path for f in scandir('./certificate/')])
         files.append('./licenses.json')
         for f in files:
+            print(f'Encrypting {f}.')
             with open(f, 'rb') as file_:
                 enc_data = self.encrypt(file_.read())
                 
@@ -79,6 +76,14 @@ class DirEncript:
             
         return text
     
-# from os import urandom
-# if __name__ == '__main__':
-#     app = DirEncript(urandom(32), urandom(16))
+if __name__ == '__main__':
+    key = urandom(32)
+    iv = urandom(16)
+
+    app = DirEncript(key, iv)
+    app.encrypt_files()
+    
+    with open('static/key', 'wb') as f:
+        f.write(key)
+    with open('static/iv', 'wb') as f:
+        f.write(iv)

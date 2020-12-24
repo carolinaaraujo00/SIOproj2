@@ -11,7 +11,7 @@ import math
 from datetime import datetime
 import time
 
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import serialization
@@ -19,6 +19,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.exceptions import InvalidSignature
 
 logger = logging.getLogger('root')
 FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
@@ -296,21 +297,24 @@ class MediaServer(resource.Resource):
         return cripto, ""
     
     # TODO alterar
-    def check_integrity(self, msg, digest):
-        self.get_digest()
-        self.digest.update(binascii.a2b_base64(msg.encode('latin')))
+    def check_integrity(self, msg, mac):
+        h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
+        h.update(binascii.a2b_base64(msg.encode('latin')))
 
-        if binascii.a2b_base64(digest.encode('latin')) == self.digest.finalize():
+        try:
+            h.verify(binascii.a2b_base64(mac.encode('latin')))
             logger.info("A mensagem chegou sem problemas :)")
             return True
-        logger.error("A mensagem foi corrompida a meio do caminho.")
-        return False 
+
+        except InvalidSignature:
+            logger.error("A mensagem foi corrompida a meio do caminho.")
+            return False
 
     def msg_received(self, request, data):
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         
         if data['type'] == 'msg':
-            if not self.check_integrity(data['msg'], data['digest']):
+            if not self.check_integrity(data['msg'], data['mac']):
                 return self.send_response(request, "error", {'error' : "Corrupted message."})
                 
             dic_text = self.decrypt_message(data)
@@ -321,19 +325,16 @@ class MediaServer(resource.Resource):
             return self.send_response(request, msg)
         
     
-    def send_response(self, request, type_, resp):
-        
-        # logger.info(f'A enviar resposta para cliente: {resp}')
-            
+    def send_response(self, request, type_, resp):         
         cripto, tag = self.encrypt_message(resp)
         
-        self.get_digest()
-        self.digest.update(cripto)
+        h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
+        h.update(cripto + b'coco')
         
         json_message = {
                     "type" : type_,
                     "msg" : binascii.b2a_base64(cripto).decode('latin').strip(),
-                    "digest" : binascii.b2a_base64(self.digest.finalize()).decode('latin').strip()
+                    "mac" : binascii.b2a_base64(h.finalize()).decode('latin').strip() 
                     }
         
         if self.client_algorithm == "ChaCha20":
@@ -386,7 +387,7 @@ class MediaServer(resource.Resource):
         self.client_authorizations.add(code)
         return code
         
-    """ Proj3 o orlanod cheira mal"""
+    """ Proj3 """
     def cert(self, request):
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         

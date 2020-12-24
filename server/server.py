@@ -94,6 +94,8 @@ class MediaServer(resource.Resource):
         self.client_algorithm = data['algorithm']
         self.client_mode = data['mode']
         self.client_digest = data['digest']
+        
+        self.set_hash_algo()
                 
         logger.info(f'Client protocols: Cipher:{self.client_algorithm}; Mode:{self.client_mode}; Digest:{self.client_digest}')
         
@@ -201,20 +203,20 @@ class MediaServer(resource.Resource):
     def get_decryptor(self):
         self.decryptor = self.cipher.decryptor()
         
-    def get_digest(self):
+    def set_hash_algo(self):
         if self.client_digest == 'SHA256':
-            self.digest = hashes.Hash(hashes.SHA256())
+            self.hash_ = hashes.SHA256()
         elif self.client_digest == 'SHA512':
-            self.digest = hashes.Hash(hashes.SHA512())
+            self.hash_ = hashes.SHA512()
         elif self.client_digest == 'BLAKE2b':
-            self.digest = hashes.Hash(hashes.BLAKE2b(64))
+            self.hash_ = hashes.BLAKE2b(64)
         elif self.client_digest == 'SHA3_256':
-            self.digest = hashes.Hash(hashes.SHA3_256())
+            self.hash_ = hashes.SHA3_256()
         elif self.client_digest == 'SHA3_512':
-            self.digest = hashes.Hash(hashes.SHA3_512())
-        if self.client_algorithm == '3DES':
-            return 8
-        return 16
+            self.hash_ = hashes.SHA3_512()
+        
+    def get_digest(self):
+        self.digest = hashes.Hash(self.hash_)   
         
     def get_decryptor4msg(self):
         self.get_mode()

@@ -46,6 +46,8 @@ class Client():
         # enviar para o servidor os protocolos escolhidos
         self.send_to_server(f'{SERVER_URL}/api/protocol_choice', self.chosen_protocols)
         
+        self.set_hash_algo()
+        
         # criar a chave publica dh para enviar ao servidor
         self.dhe() 
         
@@ -232,17 +234,20 @@ class Client():
     def get_decryptor(self):
         self.decryptor = self.cipher.decryptor()
         
-    def get_digest(self):
+    def set_hash_algo(self):
         if self.chosen_digest == 'SHA256':
-            self.digest = hashes.Hash(hashes.SHA256(), backend=default_backend())
+            self.hash_ = hashes.SHA256()
         elif self.chosen_digest == 'SHA512':
-            self.digest = hashes.Hash(hashes.SHA512(), backend=default_backend())
+            self.hash_ = hashes.SHA512()
         elif self.chosen_digest == 'BLAKE2b':
-            self.digest = hashes.Hash(hashes.BLAKE2b(64), backend=default_backend())
+            self.hash_ = hashes.BLAKE2b(64)
         elif self.chosen_digest == 'SHA3_256':
-            self.digest = hashes.Hash(hashes.SHA3_256(), backend=default_backend())
+            self.hash_ = hashes.SHA3_256()
         elif self.chosen_digest == 'SHA3_512':
-            self.digest = hashes.Hash(hashes.SHA3_512(), backend=default_backend())
+            self.hash_ = hashes.SHA3_512()
+            
+    def get_digest(self):
+        self.digest = hashes.Hash(self.hash_)
     
     def get_decryptor4msg(self):
         self.get_mode()

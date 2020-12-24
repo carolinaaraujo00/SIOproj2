@@ -40,6 +40,10 @@ class DirEncript:
         with open(file_name, 'rb') as f:
             return self.decrypt(f.read())
         
+    def encrypt_file(self, file_name, text):
+        with open(file_name, 'wb') as f:
+            f.write(text)
+        
 
     def encrypt(self, data):
         blocksize = 16

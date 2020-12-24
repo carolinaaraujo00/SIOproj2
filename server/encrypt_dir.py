@@ -4,10 +4,17 @@ from os import scandir, urandom
 
 class DirEncript:
     def __init__(self, key, iv):
-        cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+        self.key = key
+        self.iv = iv
+                
+    def new_encryptor():
+        cipher = Cipher(algorithms.AES(self.key), modes.CBC(self.iv), backend=default_backend())
         self.encryptor = cipher.encryptor()
-        self.decryptor = cipher.decryptor()
         
+    def new_decryptor():
+        cipher = Cipher(algorithms.AES(self.key), modes.CBC(self.iv), backend=default_backend())
+        self.decryptor = cipher.decryptor()
+
     # encriptar todos os ficheiros
     def encrypt_files(self):
         files = [f.path for f in scandir('./catalog/')]
@@ -43,6 +50,7 @@ class DirEncript:
         
 
     def encrypt(self, data):
+        self.new_encryptor()
         blocksize = 16
         cripto = b''
         while True:
@@ -58,6 +66,7 @@ class DirEncript:
         return cripto
     
     def decrypt(self, criptogram):
+        self.new_decryptor()
         block_size = 16
         text = b''
         

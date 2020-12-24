@@ -222,6 +222,11 @@ class MediaServer(resource.Resource):
         self.get_cipher()
         self.get_decryptor()
         
+    def block_size(self):
+        if self.client_algorithm == '3DES':
+            return 8
+        return 16
+        
     def decrypt_message(self, data):
         if "tag" in data:
             self.tag = binascii.a2b_base64(data["tag"].encode('latin'))
@@ -339,9 +344,7 @@ class MediaServer(resource.Resource):
         
         return json.dumps(json_message).encode('latin')
     
-    def authn_client(self, request):
-        data = request.content.getvalue()
-        data = json.loads(data.decode('latin'))
+    def authn_client(self, request, data):
         return self.license(request, self.decrypt_message(data))
             
 
@@ -418,7 +421,15 @@ class MediaServer(resource.Resource):
         
         with open('certificate/SIO_Server.crt', 'rb') as file:
             return json.dumps({'cert' : binascii.b2a_base64(file.read()).decode('latin').strip()}, indent=4).encode('latin')
-
+        
+    def rsa_decrypt(self, content):
+        return self.private_key.decrypt(content,
+                                            padding = padding.OAEP(
+                                            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                                            algorithm=hashes.SHA256(),
+                                            label=None
+                                            )
+                                        )
     # Send a media chunk to the client
     def do_download(self, request):
         logger.debug(f'Download: args: {request.args}')
@@ -507,25 +518,31 @@ class MediaServer(resource.Resource):
         logger.debug(f'Received POST for {request.uri}')
         try:
             content = request.content.getvalue()
-            ass_data = self.private_key.decrypt(content,
-                                            padding = padding.OAEP(
-                                            mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                                            algorithm=hashes.SHA256(),
-                                            label=None
-                                            )
-                                        )
-            data = json.loads(ass_data.decode('latin'))
             
             if request.path == b'/api/protocol_choice':
+                ass_data = self.rsa_decrypt(content)
+                data = json.loads(ass_data.decode('latin'))
+                print(data)
                 self.client_protocols(request, data)
             elif request.path == b'/api/dh_client_public_key':
+                data = json.loads(content.decode('latin'))
+                print(data)
                 return self.dh_public_key(request, data)
             elif request.path == b'/api/msg':
+                data = json.loads(content.decode('latin'))
+                print(data)
                 return self.msg_received(request, data)
             elif request.path == b'/api/authn':
+                data = json.loads(content.decode('latin'))
+                print(data)
                 return self.authn_client(request, data)
             elif request.path == b'/api/rotatekey':
+                data = json.loads(content.decode('latin'))
+                print(data)
                 return self.rotate_key(request, data)
+            
+            elif request.path == b'/api/apagar':
+                print(data)
         
         except Exception as e:
             logger.exception(e)

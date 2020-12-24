@@ -7,11 +7,11 @@ class DirEncript:
         self.key = key
         self.iv = iv
                 
-    def new_encryptor():
+    def new_encryptor(self):
         cipher = Cipher(algorithms.AES(self.key), modes.CBC(self.iv), backend=default_backend())
         self.encryptor = cipher.encryptor()
         
-    def new_decryptor():
+    def new_decryptor(self):
         cipher = Cipher(algorithms.AES(self.key), modes.CBC(self.iv), backend=default_backend())
         self.decryptor = cipher.decryptor()
 

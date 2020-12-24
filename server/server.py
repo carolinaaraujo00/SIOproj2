@@ -94,6 +94,8 @@ class MediaServer(resource.Resource):
         self.client_algorithm = data['algorithm']
         self.client_mode = data['mode']
         self.client_digest = data['digest']
+        
+        self.set_hash_algo()
                 
         logger.info(f'Client protocols: Cipher:{self.client_algorithm}; Mode:{self.client_mode}; Digest:{self.client_digest}')
         
@@ -145,9 +147,9 @@ class MediaServer(resource.Resource):
         
     def get_key(self):
         if self.client_algorithm == 'AES' or self.client_algorithm == 'ChaCha20':
-            self.key = self.derive_shared_key(hashes.SHA256(), 32, None, b'handshake data')
+            self.key = self.derive_shared_key(self.hash_, 32, None, b'handshake data')
         elif self.client_algorithm == '3DES':
-            self.key = self.derive_shared_key(hashes.SHA256(), 24, None, b'handshake data')
+            self.key = self.derive_shared_key(self.hash_, 24, None, b'handshake data')
         
     def derive_shared_key(self, algorithm, length, salt, info):
         # utilizar PBKDF2HMAC talvez seja mais seguro
@@ -201,20 +203,20 @@ class MediaServer(resource.Resource):
     def get_decryptor(self):
         self.decryptor = self.cipher.decryptor()
         
-    def get_digest(self):
+    def set_hash_algo(self):
         if self.client_digest == 'SHA256':
-            self.digest = hashes.Hash(hashes.SHA256())
+            self.hash_ = hashes.SHA256()
         elif self.client_digest == 'SHA512':
-            self.digest = hashes.Hash(hashes.SHA512())
+            self.hash_ = hashes.SHA512()
         elif self.client_digest == 'BLAKE2b':
-            self.digest = hashes.Hash(hashes.BLAKE2b(64))
+            self.hash_ = hashes.BLAKE2b(64)
         elif self.client_digest == 'SHA3_256':
-            self.digest = hashes.Hash(hashes.SHA3_256())
+            self.hash_ = hashes.SHA3_256()
         elif self.client_digest == 'SHA3_512':
-            self.digest = hashes.Hash(hashes.SHA3_512())
-        if self.client_algorithm == '3DES':
-            return 8
-        return 16
+            self.hash_ = hashes.SHA3_512()
+        
+    def get_digest(self):
+        self.digest = hashes.Hash(self.hash_)   
         
     def get_decryptor4msg(self):
         self.get_mode()
@@ -384,9 +386,25 @@ class MediaServer(resource.Resource):
         self.client_authorizations.add(code)
         return code
         
+    """ Proj3 """
+    def cert(self, request):
+        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+        
+        with open('certificate/SIO_Server.crt', 'rb') as file:
+            return json.dumps({'cert' : binascii.b2a_base64(file.read()).decode('latin').strip()}, indent=4).encode('latin')
+        
+    def rsa_decrypt(self, content):
+        return self.private_key.decrypt(content,
+                                            padding = padding.OAEP(
+                                            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                                            algorithm=hashes.SHA256(),
+                                            label=None
+                                            )
+                                        )
+        
     # Send the list of media files to clients
     def do_list(self, request):
-
+    
         data = request.getHeader('Authorization')
         data = json.loads(data)
         
@@ -413,25 +431,22 @@ class MediaServer(resource.Resource):
 
         # Return list to client
         # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        return self.send_response(request, "data", media_list)
+        return self.send_response(request, "data_list", media_list)
 
-    """ Proj3 """
-    def cert(self, request):
-        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        
-        with open('certificate/SIO_Server.crt', 'rb') as file:
-            return json.dumps({'cert' : binascii.b2a_base64(file.read()).decode('latin').strip()}, indent=4).encode('latin')
-        
-    def rsa_decrypt(self, content):
-        return self.private_key.decrypt(content,
-                                            padding = padding.OAEP(
-                                            mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                                            algorithm=hashes.SHA256(),
-                                            label=None
-                                            )
-                                        )
     # Send a media chunk to the client
     def do_download(self, request):
+        data = request.getHeader('Authorization')
+        data = json.loads(data)
+        
+        # TODO este código pode ser gerado a partir dum hmac
+        code = self.decrypt_message(data)
+        code = binascii.a2b_base64(code.encode('latin'))
+        
+        if not code in self.client_authorizations:
+           request.setResponseCode(401)
+           logger.error('Invalid license')
+           return self.send_response(request, "error", {'error': 'Not authorized'})
+       
         logger.debug(f'Download: args: {request.args}')
         
         media_id = request.args.get(b'id', [None])[0]
@@ -477,14 +492,25 @@ class MediaServer(resource.Resource):
             data = f.read(CHUNK_SIZE)
 
             # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-            return self.send_response(request, "data", {
+            return self.send_response(request, "data_download", {
                 'media_id': media_id,
                 'chunk': chunk_id,
-                'data': binascii.b2a_base64(data).decode('latin').strip()
+                'data': binascii.b2a_base64(data).decode('latin').strip(),
+                'signature' : binascii.b2a_base64(self.sign_chunk(data)).decode('latin').strip() # dá para assinar porque o tamanho da chunk é inferior ao tamanho da key
             })
 
         # File was not open?
         return self.send_response(request, "error", {'error': 'unknown'})
+    
+    def sign_chunk(self, data):
+        return self.private_key.sign(
+            data,
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH
+            ),
+            hashes.SHA256()
+        )
                 
     # Handle a GET request
     def render_GET(self, request):
@@ -540,9 +566,6 @@ class MediaServer(resource.Resource):
                 data = json.loads(content.decode('latin'))
                 print(data)
                 return self.rotate_key(request, data)
-            
-            elif request.path == b'/api/apagar':
-                print(data)
         
         except Exception as e:
             logger.exception(e)

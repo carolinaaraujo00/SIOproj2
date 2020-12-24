@@ -20,6 +20,9 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
+""" encriptar ficheiros """
+from encrypt_dir import DirEncript
+
 logger = logging.getLogger('root')
 FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
 logging.basicConfig(format=FORMAT)
@@ -70,15 +73,26 @@ class MediaServer(resource.Resource):
         self.tag = None
         self.client_authorizations = set()
         
+        self.set_file_encryptor()
+                
         self.private_key = self.get_private_key()
         
+        
+    def set_file_encryptor(self):
+        with open('static/key', 'rb') as f:
+            key = f.read()
+            
+        with open('static/iv', 'rb') as f:
+            iv = f.read()
+            
+        self.file_encryptor = DirEncript(key, iv)
+    
     def get_private_key(self):
-        with open('certificate/SIO_ServerPK.pem', 'rb') as f:
-            return serialization.load_pem_private_key(
-                f.read(), 
-                password = None,
-                backend = default_backend()
-            )
+        return serialization.load_pem_private_key(
+            self.file_encryptor.decrypt_file('certificate/SIO_ServerPK.pem'), 
+            password = None,
+            backend = default_backend()
+        )
     
     def do_get_protocols(self, request):
         logger.debug(f'Client asked for protocols')
@@ -349,8 +363,7 @@ class MediaServer(resource.Resource):
             
 
     def license(self, request, client_identifier):
-        with open('licenses.json', 'r') as json_file:
-            licenses = json.loads(json_file.read())
+        licenses = json.loads(self.file_encryptor.decrypt_file('licenses.json').decode())
             
         if client_identifier in licenses:
             diff = datetime.fromtimestamp(time.time()) - datetime.fromisoformat(licenses[client_identifier]['timestamp'])
@@ -369,8 +382,7 @@ class MediaServer(resource.Resource):
         licenses[client_identifier] = {'timestamp' : datetime.fromtimestamp(time.time()).__str__()}
         logger.info(f'Uma nova licenca foi criada para o cliente {client_identifier}')
             
-        with open('licenses.json', 'w') as json_file:
-            json_file.write(json.dumps(licenses))
+        self.file_encryptor.encrypt_file('licenses.json', json.dumps(licenses).encode())
                 
         return self.send_response(request, "sucess", binascii.b2a_base64(self.gen_code()).decode('latin').strip())
     
@@ -419,8 +431,7 @@ class MediaServer(resource.Resource):
     def cert(self, request):
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         
-        with open('certificate/SIO_Server.crt', 'rb') as file:
-            return json.dumps({'cert' : binascii.b2a_base64(file.read()).decode('latin').strip()}, indent=4).encode('latin')
+        return json.dumps({'cert' : binascii.b2a_base64(self.file_encryptor.decrypt_file('certificate/SIO_Server.crt')).decode('latin').strip()}, indent=4).encode('latin')
         
     def rsa_decrypt(self, content):
         return self.private_key.decrypt(content,
@@ -472,9 +483,8 @@ class MediaServer(resource.Resource):
         offset = chunk_id * CHUNK_SIZE
 
         # Open file, seek to correct position and return the chunk
-        with open(os.path.join(CATALOG_BASE, media_item['file_name']), 'rb') as f:
-            f.seek(offset)
-            data = f.read(CHUNK_SIZE)
+        try:
+            data = self.file_encryptor.decrypt_file(os.path.join(CATALOG_BASE, media_item['file_name']))[offset : offset+CHUNK_SIZE]
 
             # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
             return self.send_response(request, "data", {
@@ -482,9 +492,9 @@ class MediaServer(resource.Resource):
                 'chunk': chunk_id,
                 'data': binascii.b2a_base64(data).decode('latin').strip()
             })
-
-        # File was not open?
-        return self.send_response(request, "error", {'error': 'unknown'})
+        except :
+            # File was not open?
+            return self.send_response(request, "error", {'error': 'unknown'})
                 
     # Handle a GET request
     def render_GET(self, request):

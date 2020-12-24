@@ -176,9 +176,9 @@ class Client():
         
     def get_key(self):
         if self.chosen_algorithm == 'AES' or self.chosen_algorithm == 'ChaCha20':
-            self.key = self.derive_shared_key(hashes.SHA256(), 32, None, b'handshake data')
+            self.key = self.derive_shared_key(self.hash_, 32, None, b'handshake data')
         elif self.chosen_algorithm == '3DES':
-            self.key = self.derive_shared_key(hashes.SHA256(), 24, None, b'handshake data')
+            self.key = self.derive_shared_key(self.hash_, 24, None, b'handshake data')
         
     def derive_shared_key(self, algorithm, length, salt, info):
         # TODO utilizar PBKDF2HMAC talvez seja mais seguro

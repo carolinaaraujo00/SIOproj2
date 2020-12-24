@@ -147,9 +147,9 @@ class MediaServer(resource.Resource):
         
     def get_key(self):
         if self.client_algorithm == 'AES' or self.client_algorithm == 'ChaCha20':
-            self.key = self.derive_shared_key(hashes.SHA256(), 32, None, b'handshake data')
+            self.key = self.derive_shared_key(self.hash_, 32, None, b'handshake data')
         elif self.client_algorithm == '3DES':
-            self.key = self.derive_shared_key(hashes.SHA256(), 24, None, b'handshake data')
+            self.key = self.derive_shared_key(self.hash_, 24, None, b'handshake data')
         
     def derive_shared_key(self, algorithm, length, salt, info):
         # utilizar PBKDF2HMAC talvez seja mais seguro

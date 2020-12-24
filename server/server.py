@@ -384,9 +384,25 @@ class MediaServer(resource.Resource):
         self.client_authorizations.add(code)
         return code
         
+    """ Proj3 """
+    def cert(self, request):
+        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+        
+        with open('certificate/SIO_Server.crt', 'rb') as file:
+            return json.dumps({'cert' : binascii.b2a_base64(file.read()).decode('latin').strip()}, indent=4).encode('latin')
+        
+    def rsa_decrypt(self, content):
+        return self.private_key.decrypt(content,
+                                            padding = padding.OAEP(
+                                            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                                            algorithm=hashes.SHA256(),
+                                            label=None
+                                            )
+                                        )
+        
     # Send the list of media files to clients
     def do_list(self, request):
-
+    
         data = request.getHeader('Authorization')
         data = json.loads(data)
         
@@ -415,23 +431,20 @@ class MediaServer(resource.Resource):
         # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         return self.send_response(request, "data", media_list)
 
-    """ Proj3 """
-    def cert(self, request):
-        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        
-        with open('certificate/SIO_Server.crt', 'rb') as file:
-            return json.dumps({'cert' : binascii.b2a_base64(file.read()).decode('latin').strip()}, indent=4).encode('latin')
-        
-    def rsa_decrypt(self, content):
-        return self.private_key.decrypt(content,
-                                            padding = padding.OAEP(
-                                            mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                                            algorithm=hashes.SHA256(),
-                                            label=None
-                                            )
-                                        )
     # Send a media chunk to the client
     def do_download(self, request):
+        data = request.getHeader('Authorization')
+        data = json.loads(data)
+        
+        # TODO este código pode ser gerado a partir dum hmac
+        code = self.decrypt_message(data)
+        code = binascii.a2b_base64(code.encode('latin'))
+        
+        if not code in self.client_authorizations:
+           request.setResponseCode(401)
+           logger.error('Invalid license')
+           return self.send_response(request, "error", {'error': 'Not authorized'})
+       
         logger.debug(f'Download: args: {request.args}')
         
         media_id = request.args.get(b'id', [None])[0]
@@ -540,9 +553,6 @@ class MediaServer(resource.Resource):
                 data = json.loads(content.decode('latin'))
                 print(data)
                 return self.rotate_key(request, data)
-            
-            elif request.path == b'/api/apagar':
-                print(data)
         
         except Exception as e:
             logger.exception(e)

@@ -459,14 +459,22 @@ def main():
         if chunk%10 == 0:
             client.rotate_key()
         
-        req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}')
+        req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'Authorization' : client.send_msg("header", None, binascii.b2a_base64(client.code).decode('latin').strip())})
+        # req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'Authorization' : client.send_msg("header", None, binascii.b2a_base64(b'error').decode('latin').strip())})
 
+        if req.status_code == 401:
+            logger.error('License was not accepted')
+            proc.kill()
+            break
+        
         chunk = client.msg_received(req.json())
             
         try:
             data = binascii.a2b_base64(chunk['data'].encode('latin'))
             proc.stdin.write(data)
         except:
+            logger.info('Ending client session...')
+            proc.kill()
             break
     
         

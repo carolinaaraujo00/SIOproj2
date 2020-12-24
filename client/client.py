@@ -8,7 +8,7 @@ import time
 import sys
 import random
 
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import serialization
@@ -334,13 +334,13 @@ class Client():
         logger.info(f'A enviar mensagem para servidor: {msg}')
         criptogram, tag = self.encrypt_message(msg)
         
-        self.get_digest()
-        self.digest.update(criptogram)
+        h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
+        h.update(criptogram)
         
         json_message = {
             "type" : type_,
             "msg" : binascii.b2a_base64(criptogram).decode('latin').strip(),
-            "digest" : binascii.b2a_base64(self.digest.finalize()).decode('latin').strip()
+            "mac" : binascii.b2a_base64(h.finalize()).decode('latin').strip()
         }
         
         if self.chosen_algorithm == "ChaCha20":
@@ -362,20 +362,22 @@ class Client():
         else:
             logger.error('A resposta do servidor na foi ok')
             
-    def check_integrity(self, msg, digest):
-        self.get_digest()
-        self.digest.update(binascii.a2b_base64(msg.encode('latin')))
+    def check_integrity(self, msg, mac):
+        h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
+        h.update(binascii.a2b_base64(msg.encode('latin')))
 
-        if binascii.a2b_base64(digest.encode('latin')) == self.digest.finalize():
+        try:
+            h.verify(binascii.a2b_base64(mac.encode('latin')))
             logger.info("A mensagem chegou sem problemas :)")
             return True
-        logger.error("A mensagem foi corrompida a meio do caminho.")
-        
-        return False 
+
+        except InvalidSignature:
+            logger.error("A mensagem foi corrompida a meio do caminho.")
+            return False
             
     def msg_received(self, data):        
-        if not self.check_integrity(data['msg'], data['digest']):
-            return 'Mensagem corrompida'
+        if not self.check_integrity(data['msg'], data['mac']):
+            return None
         
         if data['type'] == "data_list":
             return self.decrypt_message(data)
@@ -392,7 +394,6 @@ class Client():
             return f'Recebi um tipo de dados desconhecido: {data}'
         
     """ Proj3 """
-    
     def trust_server(self):
         response = requests.get(f'{SERVER_URL}/api/cert')
         cert = binascii.a2b_base64(response.json()['cert'].encode('latin'))
@@ -453,6 +454,9 @@ def main():
 
     # Present a simple selection menu    
     print("MEDIA CATALOG\n")
+        
+    if not media_list:
+        return 
     for i, item in enumerate(media_list):
         print(f'{i} - {item["name"]}')
     print("----")

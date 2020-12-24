@@ -1,12 +1,16 @@
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from os import scandir, urandom
+from math import ceil
+
+BASEDIR = './catalog/apagar/'
+CHUNK_SIZE = 1024
 
 class DirEncript:
     def __init__(self, key, iv):
         self.key = key
         self.iv = iv
-                
+                        
     def new_encryptor(self):
         cipher = Cipher(algorithms.AES(self.key), modes.CBC(self.iv), backend=default_backend())
         self.encryptor = cipher.encryptor()
@@ -28,6 +32,22 @@ class DirEncript:
             with open(f, 'wb') as file_:
                 file_.write(enc_data)
                 
+    def encrypt_catalog_chunks(self):
+        for f in scandir('./catalog'):
+            if f.is_dir():
+                continue
+            
+            chunks = ceil(f.stat().st_size / CHUNK_SIZE)
+            
+            offset = 0
+            with open(f.path, 'rb') as file_:
+                print(f'Encrypting {f.path} with {chunks} chunks.')
+                for i in range(chunks + 1):
+                    with open(f'{BASEDIR}{f.path.split("/")[-1].split(".")[0]}{offset}', 'wb') as fwr:
+                        fwr.write(self.encrypt(file_.read(CHUNK_SIZE)))
+                        
+                    offset += CHUNK_SIZE
+            
     # decrypt de todos os ficheiros
     def decrypt_files(self):
         files = [f.path for f in scandir('./catalog/')]
@@ -90,7 +110,7 @@ if __name__ == '__main__':
     iv = urandom(16)
 
     app = DirEncript(key, iv)
-    app.encrypt_files()
+    app.encrypt_catalog_chunks()
     
     with open('static/key', 'wb') as f:
         f.write(key)

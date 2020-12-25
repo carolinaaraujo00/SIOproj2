@@ -87,7 +87,7 @@ class MediaServer(resource.Resource):
         
         """ Quando já estiverem cifrados """
         self.file_encryptor.load_keys_and_ivs(KEY, IV)
-                
+
         self.private_key = self.get_private_key()
             
     def get_private_key(self):
@@ -400,13 +400,12 @@ class MediaServer(resource.Resource):
             
         self.client_authorizations.add(code)
         return code
-        
+    
     """ Proj3 """
     def cert(self, request):
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         
-        with open('certificate/SIO_Server.crt', 'rb') as file:
-            return json.dumps({'cert' : binascii.b2a_base64(file.read()).decode('latin').strip()}, indent=4).encode('latin')
+        return json.dumps({'cert' : binascii.b2a_base64(self.file_encryptor.decrypt_file('./certificate/SIO_Server.crt')).decode('latin').strip()}, indent=4).encode('latin')
         
     def rsa_decrypt(self, content):
         return self.private_key.decrypt(content,
@@ -416,6 +415,15 @@ class MediaServer(resource.Resource):
                                             label=None
                                             )
                                         )
+    def sign_chunk(self, data):
+        return self.private_key.sign(
+            data,
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH
+            ),
+            hashes.SHA256()
+        )
         
     # Send the list of media files to clients
     def do_list(self, request):
@@ -447,30 +455,6 @@ class MediaServer(resource.Resource):
         # Return list to client
         # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         return self.send_response(request, "data_list", media_list)
-
-    """ Proj3 """
-    def cert(self, request):
-        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        
-        return json.dumps({'cert' : binascii.b2a_base64(self.file_encryptor.decrypt_file('./certificate/SIO_Server.crt')).decode('latin').strip()}, indent=4).encode('latin')
-        
-    def rsa_decrypt(self, content):
-        return self.private_key.decrypt(content,
-                                            padding = padding.OAEP(
-                                            mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                                            algorithm=hashes.SHA256(),
-                                            label=None
-                                            )
-                                        )
-    def sign_chunk(self, data):
-      return self.private_key.sign(
-          data,
-          padding.PSS(
-              mgf=padding.MGF1(hashes.SHA256()),
-              salt_length=padding.PSS.MAX_LENGTH
-          ),
-          hashes.SHA256()
-      )
 
     # Send a media chunk to the client
     def do_download(self, request):
@@ -527,7 +511,7 @@ class MediaServer(resource.Resource):
 
         # Open file, seek to correct position and return the chunk
         try:
-            print(os.path.join('.', CATALOG_BASE, 'chunks', media_item['file_name'].split('.')[0] + '#' + str(offset)))
+            # print(os.path.join('.', CATALOG_BASE, 'chunks', media_item['file_name'].split('.')[0] + '#' + str(offset)))
             # TODO alterar path se funcionar
             data = self.file_encryptor.decrypt_file(os.path.join('.', CATALOG_BASE, 'chunks', media_item['file_name'].split('.')[0] + '#' + str(offset)))
 

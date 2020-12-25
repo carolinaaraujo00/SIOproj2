@@ -21,6 +21,9 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.exceptions import InvalidSignature
 
+""" encriptar ficheiros """
+from encrypt_dir import DirEncript
+
 logger = logging.getLogger('root')
 FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
 logging.basicConfig(format=FORMAT)
@@ -55,11 +58,16 @@ CATALOG = { '898a08080d1840793122b7e118b27a95d117ebce':
         }
 
 CATALOG_BASE = 'catalog'
-CHUNK_SIZE = 1024 * 4
+CHUNK_SIZE = 1024
 
 ALGORITHMS = ['AES', 'ChaCha20', '3DES']
 MODES = ['CBC', 'OFB', 'CFB', 'GCM']
 DIGEST = ['SHA256', 'SHA512', 'BLAKE2b', 'SHA3_256', 'SHA3_512']
+
+
+# PODE SER ALTERADO PARA UMA PASSWORD
+KEY = b'\xc4\x8e*&\xf2 \x9c\xdd\xfb7Z\xed\x0fm*\xed}}\x18\xc6!\xb2\x9e\x0b\xef\x88\x92\xbfs\x87L9'
+IV = b'\xb6^\xc9\xde\x1e\xe7\xa2<\x00<\x80w\x02\x1e\xee\xf7'
 
 class MediaServer(resource.Resource):
     isLeaf = True
@@ -70,16 +78,24 @@ class MediaServer(resource.Resource):
         self.public_key = None
         self.tag = None
         self.client_authorizations = set()
+                
+        self.file_encryptor = DirEncript()
+        """ Usar quando ficheiros não estão cifrados """
+        # self.file_encryptor.encrypt_catalog_chunks()
+        # self.file_encryptor.encrypt_files()
+        # self.file_encryptor.save_keys_and_ivs(KEY, IV)
         
+        """ Quando já estiverem cifrados """
+        self.file_encryptor.load_keys_and_ivs(KEY, IV)
+                
         self.private_key = self.get_private_key()
-        
+            
     def get_private_key(self):
-        with open('certificate/SIO_ServerPK.pem', 'rb') as f:
-            return serialization.load_pem_private_key(
-                f.read(), 
-                password = None,
-                backend = default_backend()
-            )
+        return serialization.load_pem_private_key(
+            self.file_encryptor.decrypt_file('./certificate/SIO_ServerPK.pem'), 
+            password = None,
+            backend = default_backend()
+        )
     
     def do_get_protocols(self, request):
         logger.debug(f'Client asked for protocols')
@@ -352,8 +368,7 @@ class MediaServer(resource.Resource):
             
 
     def license(self, request, client_identifier):
-        with open('licenses.json', 'r') as json_file:
-            licenses = json.loads(json_file.read())
+        licenses = json.loads(self.file_encryptor.decrypt_file('./licenses.json').decode())
             
         if client_identifier in licenses:
             diff = datetime.fromtimestamp(time.time()) - datetime.fromisoformat(licenses[client_identifier]['timestamp'])
@@ -372,8 +387,7 @@ class MediaServer(resource.Resource):
         licenses[client_identifier] = {'timestamp' : datetime.fromtimestamp(time.time()).__str__()}
         logger.info(f'Uma nova licenca foi criada para o cliente {client_identifier}')
             
-        with open('licenses.json', 'w') as json_file:
-            json_file.write(json.dumps(licenses))
+        self.file_encryptor.encrypt_file('./licenses.json', json.dumps(licenses).encode())
                 
         return self.send_response(request, "sucess", binascii.b2a_base64(self.gen_code()).decode('latin').strip())
     
@@ -434,6 +448,30 @@ class MediaServer(resource.Resource):
         # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         return self.send_response(request, "data_list", media_list)
 
+    """ Proj3 """
+    def cert(self, request):
+        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+        
+        return json.dumps({'cert' : binascii.b2a_base64(self.file_encryptor.decrypt_file('./certificate/SIO_Server.crt')).decode('latin').strip()}, indent=4).encode('latin')
+        
+    def rsa_decrypt(self, content):
+        return self.private_key.decrypt(content,
+                                            padding = padding.OAEP(
+                                            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                                            algorithm=hashes.SHA256(),
+                                            label=None
+                                            )
+                                        )
+    def sign_chunk(self, data):
+      return self.private_key.sign(
+          data,
+          padding.PSS(
+              mgf=padding.MGF1(hashes.SHA256()),
+              salt_length=padding.PSS.MAX_LENGTH
+          ),
+          hashes.SHA256()
+      )
+
     # Send a media chunk to the client
     def do_download(self, request):
         data = request.getHeader('Authorization')
@@ -488,9 +526,11 @@ class MediaServer(resource.Resource):
         offset = chunk_id * CHUNK_SIZE
 
         # Open file, seek to correct position and return the chunk
-        with open(os.path.join(CATALOG_BASE, media_item['file_name']), 'rb') as f:
-            f.seek(offset)
-            data = f.read(CHUNK_SIZE)
+        try:
+            print(os.path.join('.', CATALOG_BASE, 'chunks', media_item['file_name'].split('.')[0] + '#' + str(offset)))
+            # TODO alterar path se funcionar
+            data = self.file_encryptor.decrypt_file(os.path.join('.', CATALOG_BASE, 'chunks', media_item['file_name'].split('.')[0] + '#' + str(offset)))
+
 
             # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
             return self.send_response(request, "data_download", {
@@ -500,18 +540,9 @@ class MediaServer(resource.Resource):
                 'signature' : binascii.b2a_base64(self.sign_chunk(data)).decode('latin').strip() # dá para assinar porque o tamanho da chunk é inferior ao tamanho da key
             })
 
-        # File was not open?
-        return self.send_response(request, "error", {'error': 'unknown'})
-    
-    def sign_chunk(self, data):
-        return self.private_key.sign(
-            data,
-            padding.PSS(
-                mgf=padding.MGF1(hashes.SHA256()),
-                salt_length=padding.PSS.MAX_LENGTH
-            ),
-            hashes.SHA256()
-        )
+        except :
+            # File was not open?
+            return self.send_response(request, "error", {'error': 'unknown'})
                 
     # Handle a GET request
     def render_GET(self, request):

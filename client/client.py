@@ -8,7 +8,7 @@ import time
 import sys
 import random
 
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import serialization
@@ -16,6 +16,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.exceptions import InvalidSignature
 
 logger = logging.getLogger('root')
 FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
@@ -44,6 +45,8 @@ class Client():
         
         # enviar para o servidor os protocolos escolhidos
         self.send_to_server(f'{SERVER_URL}/api/protocol_choice', self.chosen_protocols)
+        
+        self.set_hash_algo()
         
         # criar a chave publica dh para enviar ao servidor
         self.dhe() 
@@ -173,9 +176,9 @@ class Client():
         
     def get_key(self):
         if self.chosen_algorithm == 'AES' or self.chosen_algorithm == 'ChaCha20':
-            self.key = self.derive_shared_key(hashes.SHA256(), 32, None, b'handshake data')
+            self.key = self.derive_shared_key(self.hash_, 32, None, b'handshake data')
         elif self.chosen_algorithm == '3DES':
-            self.key = self.derive_shared_key(hashes.SHA256(), 24, None, b'handshake data')
+            self.key = self.derive_shared_key(self.hash_, 24, None, b'handshake data')
         
     def derive_shared_key(self, algorithm, length, salt, info):
         # TODO utilizar PBKDF2HMAC talvez seja mais seguro
@@ -231,17 +234,20 @@ class Client():
     def get_decryptor(self):
         self.decryptor = self.cipher.decryptor()
         
-    def get_digest(self):
+    def set_hash_algo(self):
         if self.chosen_digest == 'SHA256':
-            self.digest = hashes.Hash(hashes.SHA256(), backend=default_backend())
+            self.hash_ = hashes.SHA256()
         elif self.chosen_digest == 'SHA512':
-            self.digest = hashes.Hash(hashes.SHA512(), backend=default_backend())
+            self.hash_ = hashes.SHA512()
         elif self.chosen_digest == 'BLAKE2b':
-            self.digest = hashes.Hash(hashes.BLAKE2b(64), backend=default_backend())
+            self.hash_ = hashes.BLAKE2b(64)
         elif self.chosen_digest == 'SHA3_256':
-            self.digest = hashes.Hash(hashes.SHA3_256(), backend=default_backend())
+            self.hash_ = hashes.SHA3_256()
         elif self.chosen_digest == 'SHA3_512':
-            self.digest = hashes.Hash(hashes.SHA3_512(), backend=default_backend())
+            self.hash_ = hashes.SHA3_512()
+            
+    def get_digest(self):
+        self.digest = hashes.Hash(self.hash_)
     
     def get_decryptor4msg(self):
         self.get_mode()
@@ -328,13 +334,13 @@ class Client():
         logger.info(f'A enviar mensagem para servidor: {msg}')
         criptogram, tag = self.encrypt_message(msg)
         
-        self.get_digest()
-        self.digest.update(criptogram)
+        h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
+        h.update(criptogram)
         
         json_message = {
             "type" : type_,
             "msg" : binascii.b2a_base64(criptogram).decode('latin').strip(),
-            "digest" : binascii.b2a_base64(self.digest.finalize()).decode('latin').strip()
+            "mac" : binascii.b2a_base64(h.finalize()).decode('latin').strip()
         }
         
         if self.chosen_algorithm == "ChaCha20":
@@ -356,30 +362,38 @@ class Client():
         else:
             logger.error('A resposta do servidor na foi ok')
             
-    def check_integrity(self, msg, digest):
-        self.get_digest()
-        self.digest.update(binascii.a2b_base64(msg.encode('latin')))
+    def check_integrity(self, msg, mac):
+        h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
+        h.update(binascii.a2b_base64(msg.encode('latin')))
 
-        if binascii.a2b_base64(digest.encode('latin')) == self.digest.finalize():
+        try:
+            h.verify(binascii.a2b_base64(mac.encode('latin')))
             logger.info("A mensagem chegou sem problemas :)")
             return True
-        logger.error("A mensagem foi corrompida a meio do caminho.")
-        
-        return False 
+
+        except InvalidSignature:
+            logger.error("A mensagem foi corrompida a meio do caminho.")
+            return False
             
     def msg_received(self, data):        
-        if not self.check_integrity(data['msg'], data['digest']):
-            return 'Mensagem corrompida'
+        if not self.check_integrity(data['msg'], data['mac']):
+            return None
         
-        if data['type'] == "data":
+        if data['type'] == "data_list":
             return self.decrypt_message(data)
+        elif data['type'] == 'data_download':
+            data = self.decrypt_message(data)
+            
+            # verificar a assinatura
+            if not self.verify_chunk(binascii.a2b_base64(data['data'].encode('latin')), binascii.a2b_base64(data['signature'].encode('latin'))):
+                return None
+            return data
         elif data['type'] == "error":
             return self.decrypt_message(data)['error']
         else:
             return f'Recebi um tipo de dados desconhecido: {data}'
         
     """ Proj3 """
-    
     def trust_server(self):
         response = requests.get(f'{SERVER_URL}/api/cert')
         cert = binascii.a2b_base64(response.json()['cert'].encode('latin'))
@@ -399,6 +413,23 @@ class Client():
                 ret.append(x509.load_pem_x509_certificate(file_.read(), backend = default_backend()))
                 
         return ret
+    
+    def verify_chunk(self, data, signature):
+        try:
+            self.cert.public_key().verify(
+                signature,
+                data,
+                padding.PSS(
+                    mgf=padding.MGF1(hashes.SHA256()),
+                    salt_length=padding.PSS.MAX_LENGTH
+                ),
+                hashes.SHA256()
+            )
+        except InvalidSignature:
+            logger.error('Signature of chunk not valid')
+            return False
+        
+        return True
         
         
     
@@ -423,6 +454,9 @@ def main():
 
     # Present a simple selection menu    
     print("MEDIA CATALOG\n")
+        
+    if not media_list:
+        return 
     for i, item in enumerate(media_list):
         print(f'{i} - {item["name"]}')
     print("----")
@@ -459,14 +493,22 @@ def main():
         if chunk%10 == 0:
             client.rotate_key()
         
-        req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}')
+        req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'Authorization' : client.send_msg("header", None, binascii.b2a_base64(client.code).decode('latin').strip())})
+        # req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'Authorization' : client.send_msg("header", None, binascii.b2a_base64(b'error').decode('latin').strip())})
 
+        if req.status_code == 401:
+            logger.error('License was not accepted')
+            proc.kill()
+            break
+        
         chunk = client.msg_received(req.json())
-            
+        
         try:
             data = binascii.a2b_base64(chunk['data'].encode('latin'))
             proc.stdin.write(data)
         except:
+            logger.info('Ending client session...')
+            proc.kill()
             break
     
         

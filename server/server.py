@@ -11,7 +11,7 @@ import math
 from datetime import datetime
 import time
 
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import serialization
@@ -19,6 +19,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.exceptions import InvalidSignature
 
 """ encriptar ficheiros """
 from encrypt_dir import DirEncript
@@ -110,6 +111,8 @@ class MediaServer(resource.Resource):
         self.client_algorithm = data['algorithm']
         self.client_mode = data['mode']
         self.client_digest = data['digest']
+        
+        self.set_hash_algo()
                 
         logger.info(f'Client protocols: Cipher:{self.client_algorithm}; Mode:{self.client_mode}; Digest:{self.client_digest}')
         
@@ -161,9 +164,9 @@ class MediaServer(resource.Resource):
         
     def get_key(self):
         if self.client_algorithm == 'AES' or self.client_algorithm == 'ChaCha20':
-            self.key = self.derive_shared_key(hashes.SHA256(), 32, None, b'handshake data')
+            self.key = self.derive_shared_key(self.hash_, 32, None, b'handshake data')
         elif self.client_algorithm == '3DES':
-            self.key = self.derive_shared_key(hashes.SHA256(), 24, None, b'handshake data')
+            self.key = self.derive_shared_key(self.hash_, 24, None, b'handshake data')
         
     def derive_shared_key(self, algorithm, length, salt, info):
         # utilizar PBKDF2HMAC talvez seja mais seguro
@@ -217,20 +220,20 @@ class MediaServer(resource.Resource):
     def get_decryptor(self):
         self.decryptor = self.cipher.decryptor()
         
-    def get_digest(self):
+    def set_hash_algo(self):
         if self.client_digest == 'SHA256':
-            self.digest = hashes.Hash(hashes.SHA256())
+            self.hash_ = hashes.SHA256()
         elif self.client_digest == 'SHA512':
-            self.digest = hashes.Hash(hashes.SHA512())
+            self.hash_ = hashes.SHA512()
         elif self.client_digest == 'BLAKE2b':
-            self.digest = hashes.Hash(hashes.BLAKE2b(64))
+            self.hash_ = hashes.BLAKE2b(64)
         elif self.client_digest == 'SHA3_256':
-            self.digest = hashes.Hash(hashes.SHA3_256())
+            self.hash_ = hashes.SHA3_256()
         elif self.client_digest == 'SHA3_512':
-            self.digest = hashes.Hash(hashes.SHA3_512())
-        if self.client_algorithm == '3DES':
-            return 8
-        return 16
+            self.hash_ = hashes.SHA3_512()
+        
+    def get_digest(self):
+        self.digest = hashes.Hash(self.hash_)   
         
     def get_decryptor4msg(self):
         self.get_mode()
@@ -310,21 +313,24 @@ class MediaServer(resource.Resource):
         return cripto, ""
     
     # TODO alterar
-    def check_integrity(self, msg, digest):
-        self.get_digest()
-        self.digest.update(binascii.a2b_base64(msg.encode('latin')))
+    def check_integrity(self, msg, mac):
+        h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
+        h.update(binascii.a2b_base64(msg.encode('latin')))
 
-        if binascii.a2b_base64(digest.encode('latin')) == self.digest.finalize():
+        try:
+            h.verify(binascii.a2b_base64(mac.encode('latin')))
             logger.info("A mensagem chegou sem problemas :)")
             return True
-        logger.error("A mensagem foi corrompida a meio do caminho.")
-        return False 
+
+        except InvalidSignature:
+            logger.error("A mensagem foi corrompida a meio do caminho.")
+            return False
 
     def msg_received(self, request, data):
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         
         if data['type'] == 'msg':
-            if not self.check_integrity(data['msg'], data['digest']):
+            if not self.check_integrity(data['msg'], data['mac']):
                 return self.send_response(request, "error", {'error' : "Corrupted message."})
                 
             dic_text = self.decrypt_message(data)
@@ -335,19 +341,16 @@ class MediaServer(resource.Resource):
             return self.send_response(request, msg)
         
     
-    def send_response(self, request, type_, resp):
-        
-        # logger.info(f'A enviar resposta para cliente: {resp}')
-            
+    def send_response(self, request, type_, resp):         
         cripto, tag = self.encrypt_message(resp)
         
-        self.get_digest()
-        self.digest.update(cripto)
+        h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
+        h.update(cripto + b'coco')
         
         json_message = {
                     "type" : type_,
                     "msg" : binascii.b2a_base64(cripto).decode('latin').strip(),
-                    "digest" : binascii.b2a_base64(self.digest.finalize()).decode('latin').strip()
+                    "mac" : binascii.b2a_base64(h.finalize()).decode('latin').strip() 
                     }
         
         if self.client_algorithm == "ChaCha20":
@@ -398,9 +401,25 @@ class MediaServer(resource.Resource):
         self.client_authorizations.add(code)
         return code
         
+    """ Proj3 """
+    def cert(self, request):
+        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+        
+        with open('certificate/SIO_Server.crt', 'rb') as file:
+            return json.dumps({'cert' : binascii.b2a_base64(file.read()).decode('latin').strip()}, indent=4).encode('latin')
+        
+    def rsa_decrypt(self, content):
+        return self.private_key.decrypt(content,
+                                            padding = padding.OAEP(
+                                            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                                            algorithm=hashes.SHA256(),
+                                            label=None
+                                            )
+                                        )
+        
     # Send the list of media files to clients
     def do_list(self, request):
-
+    
         data = request.getHeader('Authorization')
         data = json.loads(data)
         
@@ -427,7 +446,7 @@ class MediaServer(resource.Resource):
 
         # Return list to client
         # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        return self.send_response(request, "data", media_list)
+        return self.send_response(request, "data_list", media_list)
 
     """ Proj3 """
     def cert(self, request):
@@ -443,8 +462,30 @@ class MediaServer(resource.Resource):
                                             label=None
                                             )
                                         )
+    def sign_chunk(self, data):
+      return self.private_key.sign(
+          data,
+          padding.PSS(
+              mgf=padding.MGF1(hashes.SHA256()),
+              salt_length=padding.PSS.MAX_LENGTH
+          ),
+          hashes.SHA256()
+      )
+
     # Send a media chunk to the client
     def do_download(self, request):
+        data = request.getHeader('Authorization')
+        data = json.loads(data)
+        
+        # TODO este código pode ser gerado a partir dum hmac
+        code = self.decrypt_message(data)
+        code = binascii.a2b_base64(code.encode('latin'))
+        
+        if not code in self.client_authorizations:
+           request.setResponseCode(401)
+           logger.error('Invalid license')
+           return self.send_response(request, "error", {'error': 'Not authorized'})
+       
         logger.debug(f'Download: args: {request.args}')
         
         media_id = request.args.get(b'id', [None])[0]
@@ -492,11 +533,13 @@ class MediaServer(resource.Resource):
 
 
             # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-            return self.send_response(request, "data", {
+            return self.send_response(request, "data_download", {
                 'media_id': media_id,
                 'chunk': chunk_id,
-                'data': binascii.b2a_base64(data).decode('latin').strip()
+                'data': binascii.b2a_base64(data).decode('latin').strip(),
+                'signature' : binascii.b2a_base64(self.sign_chunk(data)).decode('latin').strip() # dá para assinar porque o tamanho da chunk é inferior ao tamanho da key
             })
+
         except :
             # File was not open?
             return self.send_response(request, "error", {'error': 'unknown'})
@@ -555,9 +598,6 @@ class MediaServer(resource.Resource):
                 data = json.loads(content.decode('latin'))
                 print(data)
                 return self.rotate_key(request, data)
-            
-            elif request.path == b'/api/apagar':
-                print(data)
         
         except Exception as e:
             logger.exception(e)

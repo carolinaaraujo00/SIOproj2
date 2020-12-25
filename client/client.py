@@ -83,6 +83,9 @@ class Client():
         self.chosen_algorithm = self.choose_cycle('What algorithm would you like to use? ', matching_algorithms)
         
         if self.chosen_algorithm != 'ChaCha20':
+            if self.chosen_algorithm == '3DES':
+                if 'GCM' in matching_modes:
+                    matching_modes.remove('GCM')
             self.chosen_mode = self.choose_cycle('What mode would you like to use? ', matching_modes)
         
         self.chosen_digest = self.choose_cycle('What digest would you like to use? ', matching_digests)
@@ -92,6 +95,7 @@ class Client():
     
     def choose_cycle(self, msg, list_):
         print('###############################')
+        
         for i in range(len(list_)):
             print(f'{i} -- {list_[i]}')
         print('..............................')
@@ -101,7 +105,7 @@ class Client():
 
             if not selection.isdigit():
                 continue
-
+            
             selection = int(selection)
             if 0 <= selection < len(list_):
                 break

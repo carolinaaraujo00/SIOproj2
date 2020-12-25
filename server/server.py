@@ -11,12 +11,18 @@ import math
 from datetime import datetime
 import time
 
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.exceptions import InvalidSignature
+
+""" encriptar ficheiros """
+from encrypt_dir import DirEncript
 
 logger = logging.getLogger('root')
 FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
@@ -52,11 +58,16 @@ CATALOG = { '898a08080d1840793122b7e118b27a95d117ebce':
         }
 
 CATALOG_BASE = 'catalog'
-CHUNK_SIZE = 1024 * 4
+CHUNK_SIZE = 1024
 
 ALGORITHMS = ['AES', 'ChaCha20', '3DES']
 MODES = ['CBC', 'OFB', 'CFB', 'GCM']
 DIGEST = ['SHA256', 'SHA512', 'BLAKE2b', 'SHA3_256', 'SHA3_512']
+
+
+# PODE SER ALTERADO PARA UMA PASSWORD
+KEY = b'\xc4\x8e*&\xf2 \x9c\xdd\xfb7Z\xed\x0fm*\xed}}\x18\xc6!\xb2\x9e\x0b\xef\x88\x92\xbfs\x87L9'
+IV = b'\xb6^\xc9\xde\x1e\xe7\xa2<\x00<\x80w\x02\x1e\xee\xf7'
 
 class MediaServer(resource.Resource):
     isLeaf = True
@@ -64,10 +75,27 @@ class MediaServer(resource.Resource):
         self.client_cipher = None
         self.client_mode = None
         self.client_digest = None
-        self.private_key = None
         self.public_key = None
         self.tag = None
         self.client_authorizations = set()
+                
+        self.file_encryptor = DirEncript()
+        """ Usar quando ficheiros não estão cifrados """
+        # self.file_encryptor.encrypt_catalog_chunks()
+        # self.file_encryptor.encrypt_files()
+        # self.file_encryptor.save_keys_and_ivs(KEY, IV)
+        
+        """ Quando já estiverem cifrados """
+        self.file_encryptor.load_keys_and_ivs(KEY, IV)
+
+        self.private_key = self.get_private_key()
+            
+    def get_private_key(self):
+        return serialization.load_pem_private_key(
+            self.file_encryptor.decrypt_file('./certificate/SIO_ServerPK.pem'), 
+            password = None,
+            backend = default_backend()
+        )
     
     def do_get_protocols(self, request):
         logger.debug(f'Client asked for protocols')
@@ -79,28 +107,19 @@ class MediaServer(resource.Resource):
             },indent=4
         ).encode('latin')
     
-    def client_protocols(self, request):
-        data = request.content.getvalue()
-        data = json.loads(data)
-
+    def client_protocols(self, request, data):
         self.client_algorithm = data['algorithm']
         self.client_mode = data['mode']
         self.client_digest = data['digest']
+        
+        self.set_hash_algo()
                 
         logger.info(f'Client protocols: Cipher:{self.client_algorithm}; Mode:{self.client_mode}; Digest:{self.client_digest}')
         
-    def dh_public_key(self, request):
-        # colocar key_size a 2048
-        # p = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF
-        # g = 2
-        
-        data = request.content.getvalue()
-        data = json.loads(data.decode('latin'))
-
+    def dh_public_key(self, request, data):
         params_numbers = dh.DHParameterNumbers(data['p'], data['g'])
         self.dh_parameters = params_numbers.parameters(default_backend())
         
-        # parameters = dh.generate_parameters(generator=2, key_size=1024, backend=default_backend())
         private_key = self.dh_parameters.generate_private_key()
         
         client_pk_b = binascii.a2b_base64(data["pk"].encode('latin'))
@@ -122,10 +141,7 @@ class MediaServer(resource.Resource):
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         return json.dumps({"key" : binascii.b2a_base64(self.public_key_dh).decode('latin').strip()}, indent=4).encode('latin')
     
-    def rotate_key(self, request):
-        data = request.content.getvalue()
-        data = json.loads(data.decode('latin'))
-        
+    def rotate_key(self, request, data):
         private_key = self.dh_parameters.generate_private_key()
         
         client_pk_b = binascii.a2b_base64(data["pk"].encode('latin'))
@@ -148,9 +164,9 @@ class MediaServer(resource.Resource):
         
     def get_key(self):
         if self.client_algorithm == 'AES' or self.client_algorithm == 'ChaCha20':
-            self.key = self.derive_shared_key(hashes.SHA256(), 32, None, b'handshake data')
+            self.key = self.derive_shared_key(self.hash_, 32, None, b'handshake data')
         elif self.client_algorithm == '3DES':
-            self.key = self.derive_shared_key(hashes.SHA256(), 24, None, b'handshake data')
+            self.key = self.derive_shared_key(self.hash_, 24, None, b'handshake data')
         
     def derive_shared_key(self, algorithm, length, salt, info):
         # utilizar PBKDF2HMAC talvez seja mais seguro
@@ -204,28 +220,31 @@ class MediaServer(resource.Resource):
     def get_decryptor(self):
         self.decryptor = self.cipher.decryptor()
         
-    def get_digest(self):
+    def set_hash_algo(self):
         if self.client_digest == 'SHA256':
-            self.digest = hashes.Hash(hashes.SHA256())
+            self.hash_ = hashes.SHA256()
         elif self.client_digest == 'SHA512':
-            self.digest = hashes.Hash(hashes.SHA512())
+            self.hash_ = hashes.SHA512()
         elif self.client_digest == 'BLAKE2b':
-            self.digest = hashes.Hash(hashes.BLAKE2b(64))
+            self.hash_ = hashes.BLAKE2b(64)
         elif self.client_digest == 'SHA3_256':
-            self.digest = hashes.Hash(hashes.SHA3_256())
+            self.hash_ = hashes.SHA3_256()
         elif self.client_digest == 'SHA3_512':
-            self.digest = hashes.Hash(hashes.SHA3_512())
+            self.hash_ = hashes.SHA3_512()
         
-    def block_size(self):
-        if self.client_algorithm == '3DES':
-            return 8
-        return 16
+    def get_digest(self):
+        self.digest = hashes.Hash(self.hash_)   
         
     def get_decryptor4msg(self):
         self.get_mode()
         self.get_algorithm()
         self.get_cipher()
         self.get_decryptor()
+        
+    def block_size(self):
+        if self.client_algorithm == '3DES':
+            return 8
+        return 16
         
     def decrypt_message(self, data):
         if "tag" in data:
@@ -293,47 +312,45 @@ class MediaServer(resource.Resource):
         
         return cripto, ""
     
-    def check_integrity(self, msg, digest):
-        self.get_digest()
-        self.digest.update(binascii.a2b_base64(msg.encode('latin')))
+    # TODO alterar
+    def check_integrity(self, msg, mac):
+        h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
+        h.update(binascii.a2b_base64(msg.encode('latin')))
 
-        if binascii.a2b_base64(digest.encode('latin')) == self.digest.finalize():
+        try:
+            h.verify(binascii.a2b_base64(mac.encode('latin')))
             logger.info("A mensagem chegou sem problemas :)")
             return True
-        logger.error("A mensagem foi corrompida a meio do caminho.")
-        return False 
 
-    def msg_received(self, request):
-        data = request.content.getvalue()
-        data = json.loads(data.decode('latin'))
-        
+        except InvalidSignature:
+            logger.error("A mensagem foi corrompida a meio do caminho.")
+            return False
+
+    def msg_received(self, request, data):
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         
         if data['type'] == 'msg':
-            if not self.check_integrity(data['msg'], data['digest']):
-                return self.send_response(request, "error", {'error' : "manda isso de novo brow"})
+            if not self.check_integrity(data['msg'], data['mac']):
+                return self.send_response(request, "error", {'error' : "Corrupted message."})
                 
             dic_text = self.decrypt_message(data)
             logger.info(f'Mensagem recebida: {dic_text}')
             
-            msg = {"msg" : "A mensagem foi recebida brow."}
+            msg = {"msg" : "Message is ok."}
             
             return self.send_response(request, msg)
         
     
-    def send_response(self, request, type_, resp):
-        
-        # logger.info(f'A enviar resposta para cliente: {resp}')
-            
+    def send_response(self, request, type_, resp):         
         cripto, tag = self.encrypt_message(resp)
         
-        self.get_digest()
-        self.digest.update(cripto)
+        h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
+        h.update(cripto)
         
         json_message = {
                     "type" : type_,
                     "msg" : binascii.b2a_base64(cripto).decode('latin').strip(),
-                    "digest" : binascii.b2a_base64(self.digest.finalize()).decode('latin').strip()
+                    "mac" : binascii.b2a_base64(h.finalize()).decode('latin').strip() 
                     }
         
         if self.client_algorithm == "ChaCha20":
@@ -346,15 +363,12 @@ class MediaServer(resource.Resource):
         
         return json.dumps(json_message).encode('latin')
     
-    def authn_client(self, request):
-        data = request.content.getvalue()
-        data = json.loads(data.decode('latin'))
+    def authn_client(self, request, data):
         return self.license(request, self.decrypt_message(data))
             
 
     def license(self, request, client_identifier):
-        with open('licenses.json', 'r') as json_file:
-            licenses = json.loads(json_file.read())
+        licenses = json.loads(self.file_encryptor.decrypt_file('./licenses.json').decode())
             
         if client_identifier in licenses:
             diff = datetime.fromtimestamp(time.time()) - datetime.fromisoformat(licenses[client_identifier]['timestamp'])
@@ -373,8 +387,7 @@ class MediaServer(resource.Resource):
         licenses[client_identifier] = {'timestamp' : datetime.fromtimestamp(time.time()).__str__()}
         logger.info(f'Uma nova licenca foi criada para o cliente {client_identifier}')
             
-        with open('licenses.json', 'w') as json_file:
-            json_file.write(json.dumps(licenses))
+        self.file_encryptor.encrypt_file('./licenses.json', json.dumps(licenses).encode())
                 
         return self.send_response(request, "sucess", binascii.b2a_base64(self.gen_code()).decode('latin').strip())
     
@@ -387,10 +400,34 @@ class MediaServer(resource.Resource):
             
         self.client_authorizations.add(code)
         return code
+    
+    """ Proj3 """
+    def cert(self, request):
+        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+        
+        return json.dumps({'cert' : binascii.b2a_base64(self.file_encryptor.decrypt_file('./certificate/SIO_Server.crt')).decode('latin').strip()}, indent=4).encode('latin')
+        
+    def rsa_decrypt(self, content):
+        return self.private_key.decrypt(content,
+                                            padding = padding.OAEP(
+                                            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                                            algorithm=hashes.SHA256(),
+                                            label=None
+                                            )
+                                        )
+    def sign_chunk(self, data):
+        return self.private_key.sign(
+            data,
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH
+            ),
+            hashes.SHA256()
+        )
         
     # Send the list of media files to clients
     def do_list(self, request):
-
+    
         data = request.getHeader('Authorization')
         data = json.loads(data)
         
@@ -417,11 +454,22 @@ class MediaServer(resource.Resource):
 
         # Return list to client
         # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        return self.send_response(request, "data", media_list)
-
+        return self.send_response(request, "data_list", media_list)
 
     # Send a media chunk to the client
     def do_download(self, request):
+        data = request.getHeader('Authorization')
+        data = json.loads(data)
+        
+        # TODO este código pode ser gerado a partir dum hmac
+        code = self.decrypt_message(data)
+        code = binascii.a2b_base64(code.encode('latin'))
+        
+        if not code in self.client_authorizations:
+           request.setResponseCode(401)
+           logger.error('Invalid license')
+           return self.send_response(request, "error", {'error': 'Not authorized'})
+       
         logger.debug(f'Download: args: {request.args}')
         
         media_id = request.args.get(b'id', [None])[0]
@@ -462,34 +510,35 @@ class MediaServer(resource.Resource):
         offset = chunk_id * CHUNK_SIZE
 
         # Open file, seek to correct position and return the chunk
-        with open(os.path.join(CATALOG_BASE, media_item['file_name']), 'rb') as f:
-            f.seek(offset)
-            data = f.read(CHUNK_SIZE)
+        try:
+            # print(os.path.join('.', CATALOG_BASE, 'chunks', media_item['file_name'].split('.')[0] + '#' + str(offset)))
+            # TODO alterar path se funcionar
+            data = self.file_encryptor.decrypt_file(os.path.join('.', CATALOG_BASE, 'chunks', media_item['file_name'].split('.')[0] + '#' + str(offset)))
+
 
             # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-            return self.send_response(request, "data", {
+            return self.send_response(request, "data_download", {
                 'media_id': media_id,
                 'chunk': chunk_id,
-                'data': binascii.b2a_base64(data).decode('latin').strip()
+                'data': binascii.b2a_base64(data).decode('latin').strip(),
+                'signature' : binascii.b2a_base64(self.sign_chunk(data)).decode('latin').strip() # dá para assinar porque o tamanho da chunk é inferior ao tamanho da key
             })
 
-        # File was not open?
-        return self.send_response(request, "error", {'error': 'unknown'})
+        except :
+            # File was not open?
+            return self.send_response(request, "error", {'error': 'unknown'})
                 
     # Handle a GET request
     def render_GET(self, request):
         logger.debug(f'Received request for {request.uri}')
-
+        # TODO informação sensível deve ir por POST
         try:
             if request.path == b'/api/protocols':
                 return self.do_get_protocols(request)
-            #elif request.uri == 'api/key':
-            #...
-            #elif request.uri == 'api/auth':
-
+            elif request.path == b'/api/cert':
+                return self.cert(request)
             elif request.path == b'/api/list':
                 return self.do_list(request)
-
             elif request.path == b'/api/download':
                 return self.do_download(request)
             # elif request.path == b'/api/get_public_key_dh':
@@ -509,17 +558,30 @@ class MediaServer(resource.Resource):
     # Handle a POST request
     def render_POST(self, request):
         logger.debug(f'Received POST for {request.uri}')
-        try: 
+        try:
+            content = request.content.getvalue()
+            
             if request.path == b'/api/protocol_choice':
-                self.client_protocols(request)
+                ass_data = self.rsa_decrypt(content)
+                data = json.loads(ass_data.decode('latin'))
+                print(data)
+                self.client_protocols(request, data)
             elif request.path == b'/api/dh_client_public_key':
-                return self.dh_public_key(request)
+                data = json.loads(content.decode('latin'))
+                print(data)
+                return self.dh_public_key(request, data)
             elif request.path == b'/api/msg':
-                return self.msg_received(request)
+                data = json.loads(content.decode('latin'))
+                print(data)
+                return self.msg_received(request, data)
             elif request.path == b'/api/authn':
-                return self.authn_client(request)
+                data = json.loads(content.decode('latin'))
+                print(data)
+                return self.authn_client(request, data)
             elif request.path == b'/api/rotatekey':
-                return self.rotate_key(request)
+                data = json.loads(content.decode('latin'))
+                print(data)
+                return self.rotate_key(request, data)
         
         except Exception as e:
             logger.exception(e)

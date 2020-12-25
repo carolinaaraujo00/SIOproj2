@@ -32,6 +32,8 @@ DIGEST = ['SHA256', 'SHA512', 'BLAKE2b', 'SHA3_256', 'SHA3_512']
 class Client():
     def __init__(self):
         
+        self.ip = f'{random.randrange(256)}.{random.randrange(256)}.{random.randrange(256)}.{random.randrange(256)}'
+        
         if not self.trust_server():
             logger.error('Certificate of http server is not trusted')
             sys.exit(1)
@@ -41,10 +43,10 @@ class Client():
         self.tag = None
         self.chosen_mode = None
         self.server_protocols = self.get_protocols_from_server()
-        self.chosen_protocols = self.choose_protocol()
+        chosen_protocols = self.choose_protocol()
         
         # enviar para o servidor os protocolos escolhidos
-        self.send_to_server(f'{SERVER_URL}/api/protocol_choice', self.chosen_protocols)
+        self.send_to_server(f'{SERVER_URL}/api/protocol_choice', chosen_protocols)
         
         self.set_hash_algo()
         
@@ -122,7 +124,7 @@ class Client():
                             label=None
                         )
                     )        
-        return requests.post(uri, data = data)
+        return requests.post(uri, data = data, headers={'ip' : self.ip})
         
     def dhe(self):
         p = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF
@@ -445,7 +447,7 @@ def main():
     client = Client()
 
     # TODO encriptar o codigo client.code
-    req = requests.get(f'{SERVER_URL}/api/list', headers={'Authorization' : client.send_msg("header", None, binascii.b2a_base64(client.code).decode('latin').strip())})
+    req = requests.get(f'{SERVER_URL}/api/list', headers={'ip' : client.ip, 'Authorization' : client.send_msg("header", None, binascii.b2a_base64(client.code).decode('latin').strip())})
     if req.status_code == 200:
         print("Got Server List")
     
@@ -493,7 +495,7 @@ def main():
         if chunk%10 == 0:
             client.rotate_key()
         
-        req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'Authorization' : client.send_msg("header", None, binascii.b2a_base64(client.code).decode('latin').strip())})
+        req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'ip' : client.ip, 'Authorization' : client.send_msg("header", None, binascii.b2a_base64(client.code).decode('latin').strip())})
         # req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'Authorization' : client.send_msg("header", None, binascii.b2a_base64(b'error').decode('latin').strip())})
 
         if req.status_code == 401:

@@ -168,59 +168,52 @@ class MediaServer(resource.Resource):
         
     def get_key(self, shared_key, ip):
         if self.clients[ip]['client_algorithm'] == 'AES' or self.clients[ip]['client_algorithm'] == 'ChaCha20':
-            return self.derive_shared_key(shared_key, self.clients[ip]['algorithm'], 32, None, b'handshake data')
+            return self.derive_shared_key(shared_key, self.clients[ip]['hash'], 32, None, b'handshake data')
         elif self.clients[ip]['client_algorithm'] == '3DES':
-            return self.derive_shared_key(shared_key, self.clients[ip]['algorithm'], 24, None, b'handshake data')
+            return self.derive_shared_key(shared_key, self.clients[ip]['hash'], 24, None, b'handshake data')
         
-    def derive_shared_key(self, algorithm, length, salt, info):
+    def derive_shared_key(self, shared_key, algorithm, length, salt, info):
         # utilizar PBKDF2HMAC talvez seja mais seguro
         derived_key = HKDF(
             algorithm=algorithm,
             length=length,
             salt=salt,
             info=info,
-        ).derive(self.shared_key)
+        ).derive(shared_key)
         
         return derived_key
     
-    def get_iv(self, bytes_=16):
-        return os.urandom(bytes_)
+    def get_iv(self, algo):
+        if algo == 'AES':
+            return os.urandom(16)
+        elif algo == '3DES':
+            return os.urandom(8)
+        
     
-    def get_mode(self, make_iv=False):
-        if self.client_algorithm == 'ChaCha20':
-            self.mode = None
-            return 
-        if make_iv:
-            if self.client_algorithm == 'AES':
-                self.get_iv()
-            elif self.client_algorithm == '3DES':
-                self.get_iv(8)
-                
-        if self.client_mode == 'CBC':
-            self.mode = modes.CBC(self.iv)
-        elif self.client_mode == 'OFB':
-            self.mode = modes.OFB(self.iv)
-        elif self.client_mode == 'CFB':
-            self.mode = modes.CFB(self.iv)
-        elif self.client_mode == 'GCM':
-            self.mode = modes.GCM(self.iv, self.tag)
+    def get_mode(self, mode, iv, tag):                
+        if mode == 'CBC':
+            return modes.CBC(iv)
+        elif mode == 'OFB':
+            return modes.OFB(iv)
+        elif mode == 'CFB':
+            return modes.CFB(iv)
+        elif mode == 'GCM':
+            return modes.GCM(iv, tag)
     
-    def get_algorithm(self):
-        if self.client_algorithm == 'AES':
-            self.algorithm = algorithms.AES(self.key)
-        elif self.client_algorithm == 'ChaCha20':
-            if not self.nonce:
-                self.nonce = os.urandom(16)
-            self.algorithm = algorithms.ChaCha20(self.key, self.nonce)
-        elif self.client_algorithm == '3DES':
-            self.algorithm = algorithms.TripleDES(self.key)
+    def get_algorithm(self, algo, key, nonce):
+        if algo == 'AES':
+            return algorithms.AES(key)
+        elif algo == 'ChaCha20':
+            return algorithms.ChaCha20(key, nonce)
+        elif algo == '3DES':
+            return algorithms.TripleDES(key)
             
-    def get_encryptor(self, ip):
-        cipher = Cipher(self.clients[ip]['algorithm'], mode=self.clients[ip]['mode'], backend=default_backend())
+    def get_encryptor(self, algorithm, mode):
+        cipher = Cipher(algorithm, mode=mode, backend=default_backend())
         return cipher.encryptor()
         
-    def get_decryptor(self):
-        cipher = Cipher(self.clients[ip]['algorithm'], mode=self.clients[ip]['mode'], backend=default_backend())
+    def get_decryptor(self, algorithm, mode):
+        cipher = Cipher(algorithm, mode=mode, backend=default_backend())
         return cipher.decryptor()
         
     def set_hash_algo(self, ip):
@@ -238,33 +231,35 @@ class MediaServer(resource.Resource):
     def get_digest(self, ip):
         return hashes.Hash(self.clients[ip]['hash'])   
         
-    def get_decryptor4msg(self):
-        self.get_mode()
-        self.get_algorithm()
-        self.get_cipher()
-        self.get_decryptor()
+    def get_decryptor4msg(self, tag, nonce, iv, ip):
+        mode = self.get_mode(self.clients[ip]['client_mode'], iv, tag)
+        algorithm = self.get_algorithm(self.clients[ip]['client_algorithm'], self.clients[ip]['key'], nonce)
+        return self.get_decryptor(algorithm, mode)
         
-    def block_size(self):
-        if self.client_algorithm == '3DES':
+    def block_size(self, algo):
+        if algo == '3DES':
             return 8
         return 16
         
-    def decrypt_message(self, data):
+    def decrypt_message(self, data, ip):
+        tag = None
+        nonce = None
+        iv = None
         if "tag" in data:
-            self.tag = binascii.a2b_base64(data["tag"].encode('latin'))
+            tag = binascii.a2b_base64(data["tag"].encode('latin'))
         if "nonce" in data:
-            self.nonce = binascii.a2b_base64(data["nonce"].encode('latin'))
+            nonce = binascii.a2b_base64(data["nonce"].encode('latin'))
         if "iv" in data:
-            self.iv = binascii.a2b_base64(data["iv"].encode('latin'))
+            iv = binascii.a2b_base64(data["iv"].encode('latin'))
             
-        self.get_decryptor4msg()
+        decryptor = self.get_decryptor4msg(tag, nonce, iv, ip)
         
         criptogram = binascii.a2b_base64(data["msg"].encode('latin'))
 
-        if self.client_algorithm == "ChaCha20":
-            return json.loads(self.decryptor.update(criptogram).decode('latin'))
+        if self.clients[ip]['client_algorithm'] == "ChaCha20":
+            return json.loads(decryptor.update(criptogram).decode('latin'))
 
-        block_size = self.block_size()
+        block_size = self.block_size(self.clients[ip]['client_algorithm'])
         text = b''
         last_block = criptogram[len(criptogram) - block_size :]
         criptogram = criptogram[:-block_size]
@@ -272,52 +267,59 @@ class MediaServer(resource.Resource):
         while True:
             portion = criptogram[:block_size]
             if len(portion) == 0:
-                dec = self.decryptor.update(last_block) + self.decryptor.finalize()
+                dec = decryptor.update(last_block) + decryptor.finalize()
                 text += dec[:block_size - dec[-1]]
                 break
             
-            text += self.decryptor.update(portion)
+            text += decryptor.update(portion)
             criptogram = criptogram[block_size:]
             
         return json.loads(text.decode('latin'))
     
-    def encrypt_message(self, msg):
+    def encrypt_message(self, msg, ip):
         data = json.dumps(msg).encode('latin')
-
-        if self.client_mode == "GCM":
-            self.tag = None
-            
-        if self.client_algorithm == "ChaCha20":
-            self.nonce = None
-
-        self.get_mode(True)
-        self.get_algorithm()
-        self.get_cipher()
-        self.get_encryptor()
-        blocksize = self.block_size()
         
-        if self.client_algorithm == "ChaCha20":
-            return self.encryptor.update(data), ""
+        client_algo = self.clients[ip]['client_algorithm']
+        client_mode = self.clients[ip]['client_mode']        
+        
+        nonce = None
+        tag = None
+        if client_algo == "ChaCha20":
+            nonce = os.urandom(16)
+        
+        mode = None
+        iv = None
+        if client_algo != 'Chacha20':
+            iv = self.get_iv(client_algo)
+            mode = self.get_mode(client_mode, iv, None)
+
+        algorithm = self.get_algorithm(client_algo, self.clients[ip]['key'], nonce)
+        encryptor = self.get_encryptor(algorithm, mode)
+
+        blocksize = self.block_size(client_algo)
+        
+        if client_algo == "ChaCha20":
+            return encryptor.update(data), iv, tag, nonce
 
         cripto = b''
         while True:
             portion = data[:blocksize]
             if len(portion) != blocksize:
                 portion = portion + bytes([blocksize - len(portion)] * (blocksize - len(portion)))
-                cripto += self.encryptor.update(portion) + self.encryptor.finalize()
+                cripto += encryptor.update(portion) + encryptor.finalize()
                 break
             
-            cripto += self.encryptor.update(portion)
+            cripto += encryptor.update(portion)
             data = data[blocksize:]
         
         if self.client_mode == "GCM":
-            return cripto, self.encryptor.tag
+            tag = self.encryptor.tag
         
-        return cripto, ""
+        return cripto, iv, tag, nonce
     
     # TODO alterar
-    def check_integrity(self, msg, mac):
-        h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
+    def check_integrity(self, msg, mac, ip):
+        h = hmac.HMAC(self.clients[ip]['key'], self.clients[ip]['hash'], backend = default_backend())
         h.update(binascii.a2b_base64(msg.encode('latin')))
 
         try:
@@ -330,13 +332,11 @@ class MediaServer(resource.Resource):
             return False
 
     def msg_received(self, request, data):
-        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        
         if data['type'] == 'msg':
-            if not self.check_integrity(data['msg'], data['mac']):
+            if not self.check_integrity(data['msg'], data['mac'], self.clients[request.getHeader('ip')]):
                 return self.send_response(request, "error", {'error' : "Corrupted message."})
                 
-            dic_text = self.decrypt_message(data)
+            dic_text = self.decrypt_message(data, request.getHeader('ip'))
             logger.info(f'Mensagem recebida: {dic_text}')
             
             msg = {"msg" : "Message is ok."}
@@ -346,9 +346,12 @@ class MediaServer(resource.Resource):
     
     def send_response(self, request, type_, resp):         
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        cripto, tag = self.encrypt_message(resp)
+        ip = request.getHeader('ip')
+        client_algo = self.clients[ip]['client_algorithm']
         
-        h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
+        cripto, iv, tag, nonce  = self.encrypt_message(resp, ip)
+        
+        h = hmac.HMAC(self.clients[ip]['key'], self.clients[ip]['hash'], backend = default_backend())
         h.update(cripto)
         
         json_message = {
@@ -357,18 +360,18 @@ class MediaServer(resource.Resource):
                     "mac" : binascii.b2a_base64(h.finalize()).decode('latin').strip() 
                     }
         
-        if self.client_algorithm == "ChaCha20":
-            json_message["nonce"] = binascii.b2a_base64(self.nonce).decode('latin').strip()
+        if client_algo == "ChaCha20":
+            json_message["nonce"] = binascii.b2a_base64(nonce).decode('latin').strip()
         else:
-            json_message["iv"] = binascii.b2a_base64(self.iv).decode('latin').strip()
+            json_message["iv"] = binascii.b2a_base64(iv).decode('latin').strip()
                 
-            if self.client_mode == "GCM":
+            if self.clients[ip]['client_mode'] == "GCM":
                 json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
         
         return json.dumps(json_message).encode('latin')
     
     def authn_client(self, request, data):
-        return self.license(request, self.decrypt_message(data))
+        return self.license(request, self.decrypt_message(data, request.getHeader('ip')))
             
 
     def license(self, request, client_identifier):
@@ -436,7 +439,7 @@ class MediaServer(resource.Resource):
         data = json.loads(data)
         
         # TODO este código pode ser gerado a partir dum hmac
-        code = self.decrypt_message(data)
+        code = self.decrypt_message(data, request.getHeader('ip'))
         code = binascii.a2b_base64(code.encode('latin'))
         
         if not code in self.client_authorizations:
@@ -466,7 +469,7 @@ class MediaServer(resource.Resource):
         data = json.loads(data)
         
         # TODO este código pode ser gerado a partir dum hmac
-        code = self.decrypt_message(data)
+        code = self.decrypt_message(data, request.getHeader('ip'))
         code = binascii.a2b_base64(code.encode('latin'))
         
         if not code in self.client_authorizations:
@@ -577,13 +580,13 @@ class MediaServer(resource.Resource):
             elif request.path == b'/api/msg':
                 data = json.loads(content.decode('latin'))
                 print(data)
-                if not self.check_integrity(data['msg'], data['mac']):
+                if not self.check_integrity(data['msg'], data['mac'], request.getHeader('ip')):
                     return self.send_response(request, "error", {'error': 'Corrupted Message'})
                 return self.msg_received(request, data)
             elif request.path == b'/api/authn':
                 data = json.loads(content.decode('latin'))
                 print(data)
-                if not self.check_integrity(data['msg'], data['mac']):
+                if not self.check_integrity(data['msg'], data['mac'], request.getHeader('ip')):
                     return self.send_response(request, "error", {'error': 'Corrupted Message'})
                 return self.authn_client(request, data)
             elif request.path == b'/api/rotatekey':

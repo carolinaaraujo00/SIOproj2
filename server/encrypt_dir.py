@@ -2,20 +2,40 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from os import scandir, urandom
 from math import ceil
+import json
+import binascii
 
 BASEDIR = './catalog/chunks/'
 CHUNK_SIZE = 1024
 
 class DirEncript:
-    def __init__(self, key, iv):
-        # self.key = key
-        # self.iv = iv
-        
-        self.key = urandom(32)
-        self.iv = urandom(16)
-        
-        self.encrypt_catalog_chunks()
-        self.encrypt_files()
+    def __init__(self, keysAndIvs=None):
+        self.keysAndIvs = dict()
+                
+    @property
+    def get_keysAndIvs(self):
+        return self.keysAndIvs
+    
+    # salvar localmente as chaves
+    def save_keys_and_ivs(self, key, iv):
+        self.key = key
+        self.iv = iv
+        save = {f:{'key':binascii.b2a_base64(v['key']).decode('latin').strip(),
+                   'iv':binascii.b2a_base64(v['iv']).decode('latin').strip()}
+                for f, v in self.keysAndIvs.items()}
+        with open('./static/infos', 'wb') as f:
+            f.write(self.encrypt(json.dumps(save).encode()))
+
+    # dar load das chaves salvas
+    def load_keys_and_ivs(self, key, iv):
+        self.key = key
+        self.iv = iv
+        with open('./static/infos', 'rb') as f:
+            load = json.loads(self.decrypt(f.read()).decode())
+
+        self.keysAndIvs = {f:{'key':binascii.a2b_base64(v['key'].encode('latin')),
+                   'iv':binascii.a2b_base64(v['iv'].encode('latin'))}
+                for f, v in load.items()}
                         
     def new_encryptor(self):
         cipher = Cipher(algorithms.AES(self.key), modes.CBC(self.iv), backend=default_backend())
@@ -30,6 +50,11 @@ class DirEncript:
         files = [f.path for f in scandir('./certificate/')]
         files.append('./licenses.json')
         for f in files:
+            self.key = urandom(32)
+            self.iv = urandom(16)
+            
+            self.keysAndIvs[f] = {'key' : self.key, 'iv' : self.iv}
+            
             print(f'Encrypting {f}.')
             with open(f, 'rb') as file_:
                 enc_data = self.encrypt(file_.read())
@@ -42,36 +67,52 @@ class DirEncript:
             if f.is_dir():
                 continue
             
+            file_n = f'{BASEDIR}{f.path.split("/")[-1].split(".")[0]}'
+            
+            self.key = urandom(32)
+            self.iv = urandom(16)
+            
+            self.keysAndIvs[file_n] = {'key' : self.key, 'iv' : self.iv}
+            
             chunks = ceil(f.stat().st_size / CHUNK_SIZE)
             
             offset = 0
             with open(f.path, 'rb') as file_:
                 print(f'Encrypting {f.path} with {chunks} chunks.')
                 for i in range(chunks + 1):
-                    with open(f'{BASEDIR}{f.path.split("/")[-1].split(".")[0]}{offset}', 'wb') as fwr:
+                    with open(f'{BASEDIR}{f.path.split("/")[-1].split(".")[0]}#{offset}', 'wb') as fwr:
                         fwr.write(self.encrypt(file_.read(CHUNK_SIZE)))
                         
                     offset += CHUNK_SIZE
             
-    # decrypt de todos os ficheiros
     def decrypt_files(self):
         files = [f.path for f in scandir('./certificate/')]
         files.append('./licenses.json')
         for f in files:
+            self.key = self.keysAndIvs[f]['key']
+            self.iv = self.keysAndIvs[f]['iv']
+            
             with open(f, 'rb') as file_:
                 dec_data = self.decrypt(file_.read())
                 
             with open(f, 'wb') as file_:
                 file_.write(dec_data)
-                
-    def decrypt_catalog_chunks(self):
-        pass
-                
+                                
     def decrypt_file(self, file_name):
+        if 'chunks' in file_name:
+            self.key = self.keysAndIvs[file_name.split('#')[0]]['key']
+            self.iv = self.keysAndIvs[file_name.split('#')[0]]['iv']
+        else:
+            self.key = self.keysAndIvs[file_name]['key']
+            self.iv = self.keysAndIvs[file_name]['iv']
+
         with open(file_name, 'rb') as f:
             return self.decrypt(f.read())
         
     def encrypt_file(self, file_name, text):
+        self.key = self.keysAndIvs[file_name]['key']
+        self.iv = self.keysAndIvs[file_name]['iv']
+
         with open(file_name, 'wb') as f:
             f.write(self.encrypt(text))
         
@@ -113,14 +154,7 @@ class DirEncript:
         return text
     
 if __name__ == '__main__':
-    key = urandom(32)
-    iv = urandom(16)
 
-    app = DirEncript(key, iv)
+    app = DirEncript()
     app.encrypt_catalog_chunks()
     app.encrypt_files()
-    
-    with open('static/key', 'wb') as f:
-        f.write(key)
-    with open('static/iv', 'wb') as f:
-        f.write(iv)

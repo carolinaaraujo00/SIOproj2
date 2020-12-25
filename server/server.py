@@ -63,6 +63,11 @@ ALGORITHMS = ['AES', 'ChaCha20', '3DES']
 MODES = ['CBC', 'OFB', 'CFB', 'GCM']
 DIGEST = ['SHA256', 'SHA512', 'BLAKE2b', 'SHA3_256', 'SHA3_512']
 
+
+# PODE SER ALTERADO PARA UMA PASSWORD
+KEY = b'\xc4\x8e*&\xf2 \x9c\xdd\xfb7Z\xed\x0fm*\xed}}\x18\xc6!\xb2\x9e\x0b\xef\x88\x92\xbfs\x87L9'
+IV = b'\xb6^\xc9\xde\x1e\xe7\xa2<\x00<\x80w\x02\x1e\xee\xf7'
+
 class MediaServer(resource.Resource):
     isLeaf = True
     def __init__(self):
@@ -72,24 +77,21 @@ class MediaServer(resource.Resource):
         self.public_key = None
         self.tag = None
         self.client_authorizations = set()
+                
+        self.file_encryptor = DirEncript()
+        """ Usar quando ficheiros não estão cifrados """
+        # self.file_encryptor.encrypt_catalog_chunks()
+        # self.file_encryptor.encrypt_files()
+        # self.file_encryptor.save_keys_and_ivs(KEY, IV)
         
-        self.set_file_encryptor()
+        """ Quando já estiverem cifrados """
+        self.file_encryptor.load_keys_and_ivs(KEY, IV)
                 
         self.private_key = self.get_private_key()
-        
-        
-    def set_file_encryptor(self):
-        with open('static/key', 'rb') as f:
-            key = f.read()
             
-        with open('static/iv', 'rb') as f:
-            iv = f.read()
-            
-        self.file_encryptor = DirEncript(key, iv)
-    
     def get_private_key(self):
         return serialization.load_pem_private_key(
-            self.file_encryptor.decrypt_file('certificate/SIO_ServerPK.pem'), 
+            self.file_encryptor.decrypt_file('./certificate/SIO_ServerPK.pem'), 
             password = None,
             backend = default_backend()
         )
@@ -363,7 +365,7 @@ class MediaServer(resource.Resource):
             
 
     def license(self, request, client_identifier):
-        licenses = json.loads(self.file_encryptor.decrypt_file('licenses.json').decode())
+        licenses = json.loads(self.file_encryptor.decrypt_file('./licenses.json').decode())
             
         if client_identifier in licenses:
             diff = datetime.fromtimestamp(time.time()) - datetime.fromisoformat(licenses[client_identifier]['timestamp'])
@@ -382,7 +384,7 @@ class MediaServer(resource.Resource):
         licenses[client_identifier] = {'timestamp' : datetime.fromtimestamp(time.time()).__str__()}
         logger.info(f'Uma nova licenca foi criada para o cliente {client_identifier}')
             
-        self.file_encryptor.encrypt_file('licenses.json', json.dumps(licenses).encode())
+        self.file_encryptor.encrypt_file('./licenses.json', json.dumps(licenses).encode())
                 
         return self.send_response(request, "sucess", binascii.b2a_base64(self.gen_code()).decode('latin').strip())
     
@@ -431,7 +433,7 @@ class MediaServer(resource.Resource):
     def cert(self, request):
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         
-        return json.dumps({'cert' : binascii.b2a_base64(self.file_encryptor.decrypt_file('certificate/SIO_Server.crt')).decode('latin').strip()}, indent=4).encode('latin')
+        return json.dumps({'cert' : binascii.b2a_base64(self.file_encryptor.decrypt_file('./certificate/SIO_Server.crt')).decode('latin').strip()}, indent=4).encode('latin')
         
     def rsa_decrypt(self, content):
         return self.private_key.decrypt(content,
@@ -484,8 +486,9 @@ class MediaServer(resource.Resource):
 
         # Open file, seek to correct position and return the chunk
         try:
+            print(os.path.join('.', CATALOG_BASE, 'chunks', media_item['file_name'].split('.')[0] + '#' + str(offset)))
             # TODO alterar path se funcionar
-            data = self.file_encryptor.decrypt_file(os.path.join(CATALOG_BASE, 'apagar', media_item['file_name'].split('.')[0] + str(offset)))
+            data = self.file_encryptor.decrypt_file(os.path.join('.', CATALOG_BASE, 'chunks', media_item['file_name'].split('.')[0] + '#' + str(offset)))
 
 
             # request.responseHeaders.addRawHeader(b"content-type", b"application/json")

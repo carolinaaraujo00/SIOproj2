@@ -342,6 +342,7 @@ class MediaServer(resource.Resource):
         
     
     def send_response(self, request, type_, resp):         
+        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         cripto, tag = self.encrypt_message(resp)
         
         h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
@@ -573,10 +574,14 @@ class MediaServer(resource.Resource):
             elif request.path == b'/api/msg':
                 data = json.loads(content.decode('latin'))
                 print(data)
+                if not self.check_integrity(data['msg'], data['mac']):
+                    return self.send_response(request, "error", {'error': 'Corrupted Message'})
                 return self.msg_received(request, data)
             elif request.path == b'/api/authn':
                 data = json.loads(content.decode('latin'))
                 print(data)
+                if not self.check_integrity(data['msg'], data['mac']):
+                    return self.send_response(request, "error", {'error': 'Corrupted Message'})
                 return self.authn_client(request, data)
             elif request.path == b'/api/rotatekey':
                 data = json.loads(content.decode('latin'))

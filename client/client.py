@@ -511,9 +511,25 @@ def main():
             proc.kill()
             break
     
-        
+def continue_():
+    ret = None
+    while True:
+        choice = input("You desire to continue(y/n)? ")
+        if choice.strip().lower() == 'y':
+            ret = True
+            break
+        elif choice.strip().lower() == 'n':
+            ret = False
+            break
+        else:
+            print(f'Invalid choice ({choice}), please choose between y/n.')
+    return ret
+
 if __name__ == '__main__':
     # app = Client()
     while True:
         main()
         time.sleep(1)
+        if not continue_():
+            print('Bye')
+            break

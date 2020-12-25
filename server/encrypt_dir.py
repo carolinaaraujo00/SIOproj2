@@ -3,13 +3,19 @@ from cryptography.hazmat.backends import default_backend
 from os import scandir, urandom
 from math import ceil
 
-BASEDIR = './catalog/apagar/'
+BASEDIR = './catalog/chunks/'
 CHUNK_SIZE = 1024
 
 class DirEncript:
     def __init__(self, key, iv):
-        self.key = key
-        self.iv = iv
+        # self.key = key
+        # self.iv = iv
+        
+        self.key = urandom(32)
+        self.iv = urandom(16)
+        
+        self.encrypt_catalog_chunks()
+        self.encrypt_files()
                         
     def new_encryptor(self):
         cipher = Cipher(algorithms.AES(self.key), modes.CBC(self.iv), backend=default_backend())
@@ -21,8 +27,7 @@ class DirEncript:
 
     # encriptar todos os ficheiros
     def encrypt_files(self):
-        files = [f.path for f in scandir('./catalog/')]
-        files.extend([f.path for f in scandir('./certificate/')])
+        files = [f.path for f in scandir('./certificate/')]
         files.append('./licenses.json')
         for f in files:
             print(f'Encrypting {f}.')
@@ -50,8 +55,7 @@ class DirEncript:
             
     # decrypt de todos os ficheiros
     def decrypt_files(self):
-        files = [f.path for f in scandir('./catalog/')]
-        files.extend([f.path for f in scandir('./certificate/')])
+        files = [f.path for f in scandir('./certificate/')]
         files.append('./licenses.json')
         for f in files:
             with open(f, 'rb') as file_:
@@ -59,6 +63,9 @@ class DirEncript:
                 
             with open(f, 'wb') as file_:
                 file_.write(dec_data)
+                
+    def decrypt_catalog_chunks(self):
+        pass
                 
     def decrypt_file(self, file_name):
         with open(file_name, 'rb') as f:
@@ -111,6 +118,7 @@ if __name__ == '__main__':
 
     app = DirEncript(key, iv)
     app.encrypt_catalog_chunks()
+    app.encrypt_files()
     
     with open('static/key', 'wb') as f:
         f.write(key)

@@ -57,7 +57,7 @@ CATALOG = { '898a08080d1840793122b7e118b27a95d117ebce':
         }
 
 CATALOG_BASE = 'catalog'
-CHUNK_SIZE = 1024 * 4
+CHUNK_SIZE = 1024
 
 ALGORITHMS = ['AES', 'ChaCha20', '3DES']
 MODES = ['CBC', 'OFB', 'CFB', 'GCM']
@@ -484,7 +484,9 @@ class MediaServer(resource.Resource):
 
         # Open file, seek to correct position and return the chunk
         try:
-            data = self.file_encryptor.decrypt_file(os.path.join(CATALOG_BASE, media_item['file_name']))[offset : offset+CHUNK_SIZE]
+            # TODO alterar path se funcionar
+            data = self.file_encryptor.decrypt_file(os.path.join(CATALOG_BASE, 'apagar', media_item['file_name'].split('.')[0] + str(offset)))
+
 
             # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
             return self.send_response(request, "data", {

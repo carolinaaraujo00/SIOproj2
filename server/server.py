@@ -72,11 +72,9 @@ IV = b'\xb6^\xc9\xde\x1e\xe7\xa2<\x00<\x80w\x02\x1e\xee\xf7'
 class MediaServer(resource.Resource):
     isLeaf = True
     def __init__(self):
-        self.client_cipher = None
-        self.client_mode = None
-        self.client_digest = None
-        self.public_key = None
-        self.tag = None
+        self.clients = {}
+
+        # TODO alterar para uma coisa em condicoes        
         self.client_authorizations = set()
                 
         self.file_encryptor = DirEncript()
@@ -108,65 +106,71 @@ class MediaServer(resource.Resource):
         ).encode('latin')
     
     def client_protocols(self, request, data):
-        self.client_algorithm = data['algorithm']
-        self.client_mode = data['mode']
-        self.client_digest = data['digest']
         
-        self.set_hash_algo()
+        self.clients[request.getHeader('ip')] = {
+            'client_algorithm' : data['algorithm'],
+            'client_mode' : data['mode'],
+            'client_digest' : data['digest'],
+            'tag' : None
+        }
+        
+        self.set_hash_algo(request.getHeader('ip'))
                 
-        logger.info(f'Client protocols: Cipher:{self.client_algorithm}; Mode:{self.client_mode}; Digest:{self.client_digest}')
+        logger.info(f'{request.getHeader("ip")} protocols: Cipher:{data["algorithm"]}; Mode:{data["mode"]}; Digest:{data["digest"]}')
         
     def dh_public_key(self, request, data):
         params_numbers = dh.DHParameterNumbers(data['p'], data['g'])
-        self.dh_parameters = params_numbers.parameters(default_backend())
+        dh_parameters = params_numbers.parameters(default_backend())
         
-        private_key = self.dh_parameters.generate_private_key()
+        self.clients[request.getHeader('ip')]['dh_parameters'] = dh_parameters
+        
+        private_key = dh_parameters.generate_private_key()
         
         client_pk_b = binascii.a2b_base64(data["pk"].encode('latin'))
         
         client_public_key = serialization.load_der_public_key(client_pk_b, backend=default_backend())
         
-        self.public_key_dh = private_key.public_key().public_bytes(
+        public_key_dh = private_key.public_key().public_bytes(
             encoding=serialization.Encoding.DER,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
         
         # chave comum a servidor e cliente
-        self.shared_key = private_key.exchange(client_public_key)
+        shared_key = private_key.exchange(client_public_key)
         
         logger.debug(f'Shared Key created sucessfully')
         
         # inicializar o processo de criar encriptador e decriptador
-        self.get_key()
+        self.clients[request.getHeader('ip')]['key'] = self.get_key(shared_key, request.getHeader('ip'))
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        return json.dumps({"key" : binascii.b2a_base64(self.public_key_dh).decode('latin').strip()}, indent=4).encode('latin')
+        return json.dumps({"key" : binascii.b2a_base64(public_key_dh).decode('latin').strip()}, indent=4).encode('latin')
     
     def rotate_key(self, request, data):
-        private_key = self.dh_parameters.generate_private_key()
+        private_key = self.clients[request.getHeader('ip')]['dh_parameters'].generate_private_key()
         
         client_pk_b = binascii.a2b_base64(data["pk"].encode('latin'))
         
         client_public_key = serialization.load_der_public_key(client_pk_b, backend=default_backend())
         
-        self.public_key_dh = private_key.public_key().public_bytes(
+        public_key_dh = private_key.public_key().public_bytes(
             encoding=serialization.Encoding.DER,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
         
-        self.shared_key = private_key.exchange(client_public_key)
+        shared_key = private_key.exchange(client_public_key)
         
         logger.debug(f'Succeded at rotating key')
         
-        self.get_key()
+        self.clients[request.getHeader('ip')]['key'] = self.get_key(shared_key, request.getHeader('ip'))
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        return json.dumps({"key" : binascii.b2a_base64(self.public_key_dh).decode('latin').strip()}, indent=4).encode('latin')
+        return json.dumps({"key" : binascii.b2a_base64(public_key_dh).decode('latin').strip()}, indent=4).encode('latin')
         
         
-    def get_key(self):
-        if self.client_algorithm == 'AES' or self.client_algorithm == 'ChaCha20':
-            self.key = self.derive_shared_key(self.hash_, 32, None, b'handshake data')
-        elif self.client_algorithm == '3DES':
-            self.key = self.derive_shared_key(self.hash_, 24, None, b'handshake data')
+    def get_key(self, shared_key, ip):
+        if self.clients[ip]['client_algorithm'] == 'AES' or self.clients[ip]['client_algorithm'] == 'ChaCha20':
+            return self.derive_shared_key(shared_key, self.clients[ip]['algorithm'], 32, None, b'handshake data')
+        elif self.clients[ip]['client_algorithm'] == '3DES':
+            return self.derive_shared_key(shared_key, self.clients[ip]['algorithm'], 24, None, b'handshake data')
         
     def derive_shared_key(self, algorithm, length, salt, info):
         # utilizar PBKDF2HMAC talvez seja mais seguro
@@ -180,7 +184,7 @@ class MediaServer(resource.Resource):
         return derived_key
     
     def get_iv(self, bytes_=16):
-        self.iv = os.urandom(bytes_)
+        return os.urandom(bytes_)
     
     def get_mode(self, make_iv=False):
         if self.client_algorithm == 'ChaCha20':
@@ -211,29 +215,28 @@ class MediaServer(resource.Resource):
         elif self.client_algorithm == '3DES':
             self.algorithm = algorithms.TripleDES(self.key)
             
-    def get_cipher(self):
-        self.cipher = Cipher(self.algorithm, mode=self.mode, backend=default_backend())
-
-    def get_encryptor(self):
-        self.encryptor = self.cipher.encryptor()
+    def get_encryptor(self, ip):
+        cipher = Cipher(self.clients[ip]['algorithm'], mode=self.clients[ip]['mode'], backend=default_backend())
+        return cipher.encryptor()
         
     def get_decryptor(self):
-        self.decryptor = self.cipher.decryptor()
+        cipher = Cipher(self.clients[ip]['algorithm'], mode=self.clients[ip]['mode'], backend=default_backend())
+        return cipher.decryptor()
         
-    def set_hash_algo(self):
-        if self.client_digest == 'SHA256':
-            self.hash_ = hashes.SHA256()
-        elif self.client_digest == 'SHA512':
-            self.hash_ = hashes.SHA512()
-        elif self.client_digest == 'BLAKE2b':
-            self.hash_ = hashes.BLAKE2b(64)
-        elif self.client_digest == 'SHA3_256':
-            self.hash_ = hashes.SHA3_256()
-        elif self.client_digest == 'SHA3_512':
-            self.hash_ = hashes.SHA3_512()
+    def set_hash_algo(self, ip):
+        if self.clients[ip]['client_digest'] == 'SHA256':
+            self.clients[ip]['hash'] = hashes.SHA256()
+        elif self.clients[ip]['client_digest'] == 'SHA512':
+            self.clients[ip]['hash'] = hashes.SHA512()
+        elif self.clients[ip]['client_digest'] == 'BLAKE2b':
+            self.clients[ip]['hash'] = hashes.BLAKE2b(64)
+        elif self.clients[ip]['client_digest'] == 'SHA3_256':
+            self.clients[ip]['hash'] = hashes.SHA3_256()
+        elif self.clients[ip]['client_digest'] == 'SHA3_512':
+            self.clients[ip]['hash'] = hashes.SHA3_512()
         
-    def get_digest(self):
-        self.digest = hashes.Hash(self.hash_)   
+    def get_digest(self, ip):
+        return hashes.Hash(self.clients[ip]['hash'])   
         
     def get_decryptor4msg(self):
         self.get_mode()

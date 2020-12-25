@@ -345,7 +345,7 @@ class MediaServer(resource.Resource):
         cripto, tag = self.encrypt_message(resp)
         
         h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
-        h.update(cripto + b'coco')
+        h.update(cripto)
         
         json_message = {
                     "type" : type_,

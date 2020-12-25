@@ -312,8 +312,8 @@ class MediaServer(resource.Resource):
             cripto += encryptor.update(portion)
             data = data[blocksize:]
         
-        if self.client_mode == "GCM":
-            tag = self.encryptor.tag
+        if client_mode == "GCM":
+            tag = encryptor.tag
         
         return cripto, iv, tag, nonce
     

@@ -65,7 +65,7 @@ MODES = ['CBC', 'OFB', 'CFB', 'GCM']
 DIGEST = ['SHA256', 'SHA512', 'BLAKE2b', 'SHA3_256', 'SHA3_512']
 
 
-# PODE SER ALTERADO PARA UMA PASSWORD
+# TODO PODE SER ALTERADO PARA UMA PASSWORD
 KEY = b'\xc4\x8e*&\xf2 \x9c\xdd\xfb7Z\xed\x0fm*\xed}}\x18\xc6!\xb2\x9e\x0b\xef\x88\x92\xbfs\x87L9'
 IV = b'\xb6^\xc9\xde\x1e\xe7\xa2<\x00<\x80w\x02\x1e\xee\xf7'
 
@@ -73,9 +73,6 @@ class MediaServer(resource.Resource):
     isLeaf = True
     def __init__(self):
         self.clients = {}
-
-        # TODO alterar para uma coisa em condicoes        
-        self.client_authorizations = set()
                 
         self.file_encryptor = DirEncript()
         """ Usar quando ficheiros não estão cifrados """
@@ -173,7 +170,7 @@ class MediaServer(resource.Resource):
             return self.derive_shared_key(shared_key, self.clients[ip]['hash'], 24, None, b'handshake data')
         
     def derive_shared_key(self, shared_key, algorithm, length, salt, info):
-        # utilizar PBKDF2HMAC talvez seja mais seguro
+        # TODO utilizar PBKDF2HMAC talvez seja mais seguro
         derived_key = HKDF(
             algorithm=algorithm,
             length=length,
@@ -317,7 +314,6 @@ class MediaServer(resource.Resource):
         
         return cripto, iv, tag, nonce
     
-    # TODO alterar
     def check_integrity(self, msg, mac, ip):
         h = hmac.HMAC(self.clients[ip]['key'], self.clients[ip]['hash'], backend = default_backend())
         h.update(binascii.a2b_base64(msg.encode('latin')))
@@ -376,7 +372,8 @@ class MediaServer(resource.Resource):
 
     def license(self, request, client_identifier):
         licenses = json.loads(self.file_encryptor.decrypt_file('./licenses.json').decode())
-            
+        ip = request.getHeader('ip')
+
         if client_identifier in licenses:
             diff = datetime.fromtimestamp(time.time()) - datetime.fromisoformat(licenses[client_identifier]['timestamp'])
             
@@ -384,7 +381,9 @@ class MediaServer(resource.Resource):
             if diff.seconds/60 <= 30:
                 # tem uma licenca valida
                 logger.info(f'O cliente {client_identifier} tem licenca')
-                return self.send_response(request, "sucess", binascii.b2a_base64(self.gen_code()).decode('latin').strip())
+
+                self.clients[ip]['code'] = os.urandom(16)
+                return self.send_response(request, "sucess", binascii.b2a_base64(self.clients[ip]['code']).decode('latin').strip())
         
         
         """ TODO falta fazer a autenticacao do cliente """
@@ -395,18 +394,10 @@ class MediaServer(resource.Resource):
         logger.info(f'Uma nova licenca foi criada para o cliente {client_identifier}')
             
         self.file_encryptor.encrypt_file('./licenses.json', json.dumps(licenses).encode())
-                
-        return self.send_response(request, "sucess", binascii.b2a_base64(self.gen_code()).decode('latin').strip())
+
+        self.clients[ip]['code'] = os.urandom(16)
+        return self.send_response(request, "sucess", binascii.b2a_base64(self.clients[ip]['code']).decode('latin').strip())
     
-    def gen_code(self):
-        code = None
-        while True:
-            code = os.urandom(32)
-            if not code in self.client_authorizations:
-                break
-            
-        self.client_authorizations.add(code)
-        return code
     
     """ Proj3 """
     def cert(self, request):
@@ -431,18 +422,29 @@ class MediaServer(resource.Resource):
             ),
             hashes.SHA256()
         )
-        
+    
+    def code_verify(self, code, ip):
+        h = hmac.HMAC(self.clients[ip]['key'], self.clients[ip]['hash'], backend=default_backend())
+        h.update(self.clients[ip]['code'])
+        try:
+            h.verify(code)
+            logger.info("Authorized.")
+            return True
+        except InvalidSignature:
+            logger.error("Invalid code - unauthorized.")
+            return False
+
+
     # Send the list of media files to clients
     def do_list(self, request):
     
         data = request.getHeader('Authorization')
         data = json.loads(data)
         
-        # TODO este código pode ser gerado a partir dum hmac
         code = self.decrypt_message(data, request.getHeader('ip'))
         code = binascii.a2b_base64(code.encode('latin'))
         
-        if not code in self.client_authorizations:
+        if not self.code_verify(code, request.getHeader('ip')):
            request.setResponseCode(401)
            return self.send_response(request, "error", {'error': 'Not authorized'})
 
@@ -468,13 +470,11 @@ class MediaServer(resource.Resource):
         data = request.getHeader('Authorization')
         data = json.loads(data)
         
-        # TODO este código pode ser gerado a partir dum hmac
         code = self.decrypt_message(data, request.getHeader('ip'))
         code = binascii.a2b_base64(code.encode('latin'))
         
-        if not code in self.client_authorizations:
+        if not self.code_verify(code, request.getHeader('ip')):
            request.setResponseCode(401)
-           logger.error('Invalid license')
            return self.send_response(request, "error", {'error': 'Not authorized'})
        
         logger.debug(f'Download: args: {request.args}')
@@ -518,12 +518,8 @@ class MediaServer(resource.Resource):
 
         # Open file, seek to correct position and return the chunk
         try:
-            # print(os.path.join('.', CATALOG_BASE, 'chunks', media_item['file_name'].split('.')[0] + '#' + str(offset)))
-            # TODO alterar path se funcionar
             data = self.file_encryptor.decrypt_file(os.path.join('.', CATALOG_BASE, 'chunks', media_item['file_name'].split('.')[0] + '#' + str(offset)))
 
-
-            # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
             return self.send_response(request, "data_download", {
                 'media_id': media_id,
                 'chunk': chunk_id,
@@ -548,10 +544,6 @@ class MediaServer(resource.Resource):
                 return self.do_list(request)
             elif request.path == b'/api/download':
                 return self.do_download(request)
-            # elif request.path == b'/api/get_public_key_dh':
-            #     request.responseHeaders.addRawHeader(b"content-type", b'application/json')
-            #     return json.dumps(binascii.b2a_base64(self.public_key_dh).decode('latin').strip(), indent=4).encode('latin')
-
             else:
                 request.responseHeaders.addRawHeader(b"content-type", b'text/plain')
                 return b'Methods: /api/protocols /api/list /api/download'

@@ -295,7 +295,7 @@ class Client():
             cripto += self.encryptor.update(portion)
             data = data[blocksize:]
             
-            # se o modo for GCM
+        # se o modo for GCM
         if self.chosen_mode == "GCM":
             return cripto, self.encryptor.tag
         
@@ -451,7 +451,10 @@ def main():
     client = Client()
 
     # TODO encriptar o codigo client.code
-    req = requests.get(f'{SERVER_URL}/api/list', headers={'ip' : client.ip, 'Authorization' : client.send_msg("header", None, binascii.b2a_base64(client.code).decode('latin').strip())})
+    h = hmac.HMAC(client.key, client.hash_, backend = default_backend())
+    h.update(client.code)
+    req = requests.get(f'{SERVER_URL}/api/list', headers={'ip' : client.ip, 'Authorization' : client.send_msg("header", None, binascii.b2a_base64(h.finalize()).decode('latin').strip())})
+    
     if req.status_code == 200:
         print("Got Server List")
     
@@ -498,8 +501,10 @@ def main():
         # rodar chave a cada 10 chunks
         if chunk%10 == 0:
             client.rotate_key()
-        
-        req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'ip' : client.ip, 'Authorization' : client.send_msg("header", None, binascii.b2a_base64(client.code).decode('latin').strip())})
+
+        h = hmac.HMAC(client.key, client.hash_, backend = default_backend())
+        h.update(client.code)
+        req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'ip' : client.ip, 'Authorization' : client.send_msg("header", None, binascii.b2a_base64(h.finalize()).decode('latin').strip())})
         # req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'Authorization' : client.send_msg("header", None, binascii.b2a_base64(b'error').decode('latin').strip())})
 
         if req.status_code == 401:

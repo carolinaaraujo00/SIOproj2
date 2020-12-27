@@ -28,7 +28,7 @@ class HardwareToken:
         self.mechanism = PyKCS11.Mechanism(PyKCS11.CKM_SHA1_RSA_PKCS, None)
 
     def sign(self, msg):
-        return self.session.sign(self.private_key, msg, self.mechanism)
+        return binascii.b2a_base64(bytes(self.session.sign(self.private_key, msg, self.mechanism))).decode('latin').strip()
 
     def get_chain_certs(self):
         certs = ['CITIZEN AUTHENTICATION CERTIFICATE', 'AUTHENTICATION SUB CA', 'ROOT CA']

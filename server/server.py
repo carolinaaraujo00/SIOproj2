@@ -12,7 +12,7 @@ from datetime import datetime
 import time
 
 from cryptography.hazmat.primitives import hashes, hmac
-from cryptography.hazmat.primitives.asymmetric import dh
+from cryptography.hazmat.primitives.asymmetric import dh, rsa
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.exceptions import InvalidSignature
 from cryptography import x509
+from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15
 
 """ encriptar ficheiros """
 from encrypt_dir import DirEncript
@@ -418,7 +419,7 @@ class MediaServer(resource.Resource):
                                             label=None
                                             )
                                         )
-    def sign_chunk(self, data):
+    def sign(self, data):
         return self.private_key.sign(
             data,
             padding.PSS(
@@ -463,7 +464,51 @@ class MediaServer(resource.Resource):
     	logger.info('Invalid certificate.')
     	return json.dumps({'msg': 'Invalid certificate'}).encode('latin')
 
+    def make_ass_cipher_and_sign(self, ip):
+        priv_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=2048
+        )
+        
+        self.clients[ip]['sessionPrivKey'] = priv_key
 
+        pub_key = priv_key.public_key().public_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PublicFormat.SubjectPublicKeyInfo
+            )
+        return binascii.b2a_base64(pub_key).decode('latin').strip(), binascii.b2a_base64(self.sign(pub_key)).decode('latin').strip()
+
+    def receive_pub_key(self, request, data):
+        ip = request.getHeader('ip')
+        request.requestHeaders.addRawHeader(b'content-type', b'application/json')
+
+        msg = binascii.a2b_base64(data['msg'].encode('latin'))
+        
+        try:
+            result = self.clients[ip]['cert'].public_key().verify(
+                binascii.a2b_base64(data['signature'].encode('latin')),
+                msg,
+                PKCS1v15(),
+                hashes.SHA1(),
+            )
+            # TODO APAGAR RESULT 
+            print(result)
+            logger.info('Assinatura válida.')
+        except InvalidSignature:
+            logger.error('ERRO: Conteúdo e/ou assinatura falharam na verificação.')
+            request.setResponseCode(400)
+            return json.dumps({'msg' : 'Signature failed'}).encode('latin')
+
+        self.clients[ip]['publicKey'] = serialization.load_pem_public_key(
+            msg,
+            password=None
+        )
+        
+        public_key, signature = self.make_ass_cipher_and_sign(ip)
+        
+        return json.dumps({'msg' : public_key, 'signature' : signature}).encode('latin')
+    
+   
     # Send the list of media files to clients
     def do_list(self, request):
     
@@ -552,7 +597,7 @@ class MediaServer(resource.Resource):
                 'media_id': media_id,
                 'chunk': chunk_id,
                 'data': binascii.b2a_base64(data).decode('latin').strip(),
-                'signature' : binascii.b2a_base64(self.sign_chunk(data)).decode('latin').strip() # dá para assinar porque o tamanho da chunk é inferior ao tamanho da key
+                'signature' : binascii.b2a_base64(self.sign(data)).decode('latin').strip() # dá para assinar porque o tamanho da chunk é inferior ao tamanho da key
             })
 
         except :
@@ -615,6 +660,9 @@ class MediaServer(resource.Resource):
             elif request.path == b'/api/hello':
             	data = json.loads(content.decode('latin'))
             	return self.check_client_cert(request, data)
+            elif request.path == b'/api/publicKey':
+                data = json.loads(content.decode('latin'))
+                return self.receive_pub_key(request, data)
         
         except Exception as e:
             logger.exception(e)

@@ -18,6 +18,8 @@ from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.exceptions import InvalidSignature
 
+from hardware_token import HardwareToken
+
 logger = logging.getLogger('root')
 FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
 logging.basicConfig(format=FORMAT)
@@ -33,10 +35,21 @@ class Client():
     def __init__(self):
         
         self.ip = f'{random.randrange(256)}.{random.randrange(256)}.{random.randrange(256)}.{random.randrange(256)}'
-        
+
+        self.hardware_token = HardwareToken()
+
+        certs = self.hardware_token.get_chain_certs()
+
+        response = self.send_to_server(f'{SERVER_URL}/api/hello', certs, False, False)
+        logger.info(response.json()['msg'])
+        if response.status_code != 200:
+            exit(1)
+
         if not self.trust_server():
             logger.error('Certificate of http server is not trusted')
             sys.exit(1)
+
+        self.make_ass_cipher()
             
         logger.info('Certificate of http server is trusted')
                 
@@ -66,12 +79,12 @@ class Client():
         return self.send_msg('auth', f'{SERVER_URL}/api/authn', username)
 
     def get_protocols_from_server(self):
-        req_protocols = requests.get(f'{SERVER_URL}/api/protocols')
+        req_protocols = requests.get(f'{SERVER_URL}/api/protocols', headers={'ip' : self.ip})
         if req_protocols.status_code == 200:
             logger.info('Got Protocols List')
 
         protocols_avail = req_protocols.json()
-        logger.info(f'Available protocols in the server:\n\Algorithms: {protocols_avail["algorithms"]}\n\tModes: {protocols_avail["modes"]}\n\tDigests: {protocols_avail["digests"]}')
+        logger.info(f'Available protocols in the server:\n\tAlgorithms: {protocols_avail["algorithms"]}\n\tModes: {protocols_avail["modes"]}\n\tDigests: {protocols_avail["digests"]}')
 
         return protocols_avail
     
@@ -193,6 +206,7 @@ class Client():
             length=length,
             salt=salt,
             info=info,
+            backend=default_backend()
         ).derive(self.shared_key)
         
         return derived_key
@@ -401,7 +415,7 @@ class Client():
         
     """ Proj3 """
     def trust_server(self):
-        response = requests.get(f'{SERVER_URL}/api/cert')
+        response = requests.get(f'{SERVER_URL}/api/cert', headers={'ip' : self.ip})
         cert = binascii.a2b_base64(response.json()['cert'].encode('latin'))
         self.cert = x509.load_pem_x509_certificate(cert, backend = default_backend())
 
@@ -436,7 +450,9 @@ class Client():
             return False
         
         return True
-        
+    
+    def make_ass_cipher(self):
+        pass
         
     
 def main():

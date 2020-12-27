@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.exceptions import InvalidSignature
+from cryptography import x509
 
 """ encriptar ficheiros """
 from encrypt_dir import DirEncript
@@ -73,7 +74,7 @@ class MediaServer(resource.Resource):
     isLeaf = True
     def __init__(self):
         self.clients = {}
-                
+
         self.file_encryptor = DirEncript()
         """ Usar quando ficheiros não estão cifrados """
         # self.file_encryptor.encrypt_catalog_chunks()
@@ -104,13 +105,11 @@ class MediaServer(resource.Resource):
     
     def client_protocols(self, request, data):
         
-        self.clients[request.getHeader('ip')] = {
-            'client_algorithm' : data['algorithm'],
-            'client_mode' : data['mode'],
-            'client_digest' : data['digest'],
-            'tag' : None
-        }
-        
+        self.clients[request.getHeader('ip')]['client_algorithm'] = data['algorithm']
+        self.clients[request.getHeader('ip')]['client_mode'] = data['mode']
+        self.clients[request.getHeader('ip')]['client_digest'] = data['digest']
+        self.clients[request.getHeader('ip')]['tag'] = None
+
         self.set_hash_algo(request.getHeader('ip'))
                 
         logger.info(f'{request.getHeader("ip")} protocols: Cipher:{data["algorithm"]}; Mode:{data["mode"]}; Digest:{data["digest"]}')
@@ -176,6 +175,7 @@ class MediaServer(resource.Resource):
             length=length,
             salt=salt,
             info=info,
+            backend=default_backend()
         ).derive(shared_key)
         
         return derived_key
@@ -434,6 +434,28 @@ class MediaServer(resource.Resource):
             logger.error("Invalid code - unauthorized.")
             return False
 
+    def get_trusted_cas(self):
+    	# TODO falta encriptar e retirar todos os certs
+    	with open('./trusted_cas/cert.der', 'rb') as f:
+    		return x509.load_der_x509_certificate(f.read(), backend=default_backend())
+
+    def check_client_cert(self, request, data):
+    	request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+
+    	trusted = self.get_trusted_cas()
+
+    	client_chain_certs = [x509.load_der_x509_certificate(binascii.a2b_base64(c.encode('latin')), backend=default_backend()) for c in data]
+    	for cert in client_chain_certs:
+    		if cert.issuer == trusted.subject:
+    			logger.info('Valid certificate.')
+    			self.clients[request.getHeader('ip')] = {'cert' : client_chain_certs[0]}
+    			return json.dumps({'msg': 'Valid certificate'}).encode('latin')
+
+    	request.setResponseCode(406)
+
+    	logger.info('Invalid certificate.')
+    	return json.dumps({'msg': 'Invalid certificate'}).encode('latin')
+
 
     # Send the list of media files to clients
     def do_list(self, request):
@@ -462,7 +484,6 @@ class MediaServer(resource.Resource):
                 })
 
         # Return list to client
-        # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         return self.send_response(request, "data_list", media_list)
 
     # Send a media chunk to the client
@@ -530,11 +551,15 @@ class MediaServer(resource.Resource):
         except :
             # File was not open?
             return self.send_response(request, "error", {'error': 'unknown'})
-                
+
     # Handle a GET request
     def render_GET(self, request):
         logger.debug(f'Received request for {request.uri}')
         # TODO informação sensível deve ir por POST
+        if not request.getHeader('ip') in self.clients:
+            request.setResponseCode(401)
+            request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+            return json.dumps({'msg' : 'Not authorized to view this content'}).encode('latin')
         try:
             if request.path == b'/api/protocols':
                 return self.do_get_protocols(request)
@@ -563,28 +588,26 @@ class MediaServer(resource.Resource):
             if request.path == b'/api/protocol_choice':
                 ass_data = self.rsa_decrypt(content)
                 data = json.loads(ass_data.decode('latin'))
-                print(data)
                 self.client_protocols(request, data)
             elif request.path == b'/api/dh_client_public_key':
                 data = json.loads(content.decode('latin'))
-                print(data)
                 return self.dh_public_key(request, data)
             elif request.path == b'/api/msg':
                 data = json.loads(content.decode('latin'))
-                print(data)
                 if not self.check_integrity(data['msg'], data['mac'], request.getHeader('ip')):
                     return self.send_response(request, "error", {'error': 'Corrupted Message'})
                 return self.msg_received(request, data)
             elif request.path == b'/api/authn':
                 data = json.loads(content.decode('latin'))
-                print(data)
                 if not self.check_integrity(data['msg'], data['mac'], request.getHeader('ip')):
                     return self.send_response(request, "error", {'error': 'Corrupted Message'})
                 return self.authn_client(request, data)
             elif request.path == b'/api/rotatekey':
                 data = json.loads(content.decode('latin'))
-                print(data)
                 return self.rotate_key(request, data)
+            elif request.path == b'/api/hello':
+            	data = json.loads(content.decode('latin'))
+            	return self.check_client_cert(request, data)
         
         except Exception as e:
             logger.exception(e)

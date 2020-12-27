@@ -1,0 +1,6 @@
+apt install swig 
+apt install pcscd
+pip3 install pykcs11
+apt install opensc-pkcs11
+
+https://www.autenticacao.gov.pt/cc-aplicacao

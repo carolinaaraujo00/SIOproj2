@@ -1,4 +1,6 @@
 import PyKCS11
+import binascii
+
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
@@ -36,7 +38,8 @@ class HardwareToken:
         cert_obj = self.session.findObjects([
             (PyKCS11.CKA_CLASS, PyKCS11.CKO_CERTIFICATE),
             (PyKCS11.CKA_LABEL, label)])[0]
-        return bytes(self.session.getAttributeValue(cert_obj, [PyKCS11.CKA['CKA_VALUE']])[0])
+        return binascii.b2a_base64(bytes(self.session.getAttributeValue(cert_obj, [PyKCS11.CKA['CKA_VALUE']])[0])).decode('latin').strip()
+
 
     def load_card_interface_mod(self, lib):
         pkcs11 = PyKCS11.PyKCS11Lib()
@@ -48,7 +51,7 @@ class HardwareToken:
         if slots:
             return pkcs11.openSession(slots[0])
         
-        print("No slots.")
+        print("No citizen card was provided.")
         exit(1)
         
 if __name__ == '__main__':

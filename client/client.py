@@ -18,6 +18,8 @@ from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.exceptions import InvalidSignature
 
+from hardware_token import HardwareToken
+
 logger = logging.getLogger('root')
 FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
 logging.basicConfig(format=FORMAT)
@@ -32,19 +34,32 @@ DIGEST = ['SHA256', 'SHA512', 'BLAKE2b', 'SHA3_256', 'SHA3_512']
 class Client():
     def __init__(self):
         
+        self.ip = f'{random.randrange(256)}.{random.randrange(256)}.{random.randrange(256)}.{random.randrange(256)}'
+
+        self.hardware_token = HardwareToken()
+
+        certs = self.hardware_token.get_chain_certs()
+
+        response = self.send_to_server(f'{SERVER_URL}/api/hello', certs, False, False)
+        logger.info(response.json()['msg'])
+        if response.status_code != 200:
+            exit(1)
+
         if not self.trust_server():
             logger.error('Certificate of http server is not trusted')
             sys.exit(1)
+
+        self.make_ass_cipher()
             
         logger.info('Certificate of http server is trusted')
                 
         self.tag = None
         self.chosen_mode = None
         self.server_protocols = self.get_protocols_from_server()
-        self.chosen_protocols = self.choose_protocol()
+        chosen_protocols = self.choose_protocol()
         
         # enviar para o servidor os protocolos escolhidos
-        self.send_to_server(f'{SERVER_URL}/api/protocol_choice', self.chosen_protocols)
+        self.send_to_server(f'{SERVER_URL}/api/protocol_choice', chosen_protocols)
         
         self.set_hash_algo()
         
@@ -64,12 +79,12 @@ class Client():
         return self.send_msg('auth', f'{SERVER_URL}/api/authn', username)
 
     def get_protocols_from_server(self):
-        req_protocols = requests.get(f'{SERVER_URL}/api/protocols')
+        req_protocols = requests.get(f'{SERVER_URL}/api/protocols', headers={'ip' : self.ip})
         if req_protocols.status_code == 200:
             logger.info('Got Protocols List')
 
         protocols_avail = req_protocols.json()
-        logger.info(f'Available protocols in the server:\n\Algorithms: {protocols_avail["algorithms"]}\n\tModes: {protocols_avail["modes"]}\n\tDigests: {protocols_avail["digests"]}')
+        logger.info(f'Available protocols in the server:\n\tAlgorithms: {protocols_avail["algorithms"]}\n\tModes: {protocols_avail["modes"]}\n\tDigests: {protocols_avail["digests"]}')
 
         return protocols_avail
     
@@ -81,6 +96,9 @@ class Client():
         self.chosen_algorithm = self.choose_cycle('What algorithm would you like to use? ', matching_algorithms)
         
         if self.chosen_algorithm != 'ChaCha20':
+            if self.chosen_algorithm == '3DES':
+                if 'GCM' in matching_modes:
+                    matching_modes.remove('GCM')
             self.chosen_mode = self.choose_cycle('What mode would you like to use? ', matching_modes)
         
         self.chosen_digest = self.choose_cycle('What digest would you like to use? ', matching_digests)
@@ -90,6 +108,7 @@ class Client():
     
     def choose_cycle(self, msg, list_):
         print('###############################')
+        
         for i in range(len(list_)):
             print(f'{i} -- {list_[i]}')
         print('..............................')
@@ -99,7 +118,7 @@ class Client():
 
             if not selection.isdigit():
                 continue
-
+            
             selection = int(selection)
             if 0 <= selection < len(list_):
                 break
@@ -122,7 +141,7 @@ class Client():
                             label=None
                         )
                     )        
-        return requests.post(uri, data = data)
+        return requests.post(uri, data = data, headers={'ip' : self.ip})
         
     def dhe(self):
         p = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF
@@ -187,6 +206,7 @@ class Client():
             length=length,
             salt=salt,
             info=info,
+            backend=default_backend()
         ).derive(self.shared_key)
         
         return derived_key
@@ -289,7 +309,7 @@ class Client():
             cripto += self.encryptor.update(portion)
             data = data[blocksize:]
             
-            # se o modo for GCM
+        # se o modo for GCM
         if self.chosen_mode == "GCM":
             return cripto, self.encryptor.tag
         
@@ -395,7 +415,7 @@ class Client():
         
     """ Proj3 """
     def trust_server(self):
-        response = requests.get(f'{SERVER_URL}/api/cert')
+        response = requests.get(f'{SERVER_URL}/api/cert', headers={'ip' : self.ip})
         cert = binascii.a2b_base64(response.json()['cert'].encode('latin'))
         self.cert = x509.load_pem_x509_certificate(cert, backend = default_backend())
 
@@ -430,7 +450,9 @@ class Client():
             return False
         
         return True
-        
+    
+    def make_ass_cipher(self):
+        pass
         
     
 def main():
@@ -445,7 +467,10 @@ def main():
     client = Client()
 
     # TODO encriptar o codigo client.code
-    req = requests.get(f'{SERVER_URL}/api/list', headers={'Authorization' : client.send_msg("header", None, binascii.b2a_base64(client.code).decode('latin').strip())})
+    h = hmac.HMAC(client.key, client.hash_, backend = default_backend())
+    h.update(client.code)
+    req = requests.get(f'{SERVER_URL}/api/list', headers={'ip' : client.ip, 'Authorization' : client.send_msg("header", None, binascii.b2a_base64(h.finalize()).decode('latin').strip())})
+    
     if req.status_code == 200:
         print("Got Server List")
     
@@ -492,8 +517,10 @@ def main():
         # rodar chave a cada 10 chunks
         if chunk%10 == 0:
             client.rotate_key()
-        
-        req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'Authorization' : client.send_msg("header", None, binascii.b2a_base64(client.code).decode('latin').strip())})
+
+        h = hmac.HMAC(client.key, client.hash_, backend = default_backend())
+        h.update(client.code)
+        req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'ip' : client.ip, 'Authorization' : client.send_msg("header", None, binascii.b2a_base64(h.finalize()).decode('latin').strip())})
         # req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'Authorization' : client.send_msg("header", None, binascii.b2a_base64(b'error').decode('latin').strip())})
 
         if req.status_code == 401:
@@ -511,9 +538,25 @@ def main():
             proc.kill()
             break
     
-        
+def continue_():
+    ret = None
+    while True:
+        choice = input("You desire to continue(y/n)? ")
+        if choice.strip().lower() == 'y':
+            ret = True
+            break
+        elif choice.strip().lower() == 'n':
+            ret = False
+            break
+        else:
+            print(f'Invalid choice ({choice}), please choose between y/n.')
+    return ret
+
 if __name__ == '__main__':
     # app = Client()
     while True:
         main()
         time.sleep(1)
+        if not continue_():
+            print('Bye')
+            break

@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.exceptions import InvalidSignature
+from cryptography import x509
 
 """ encriptar ficheiros """
 from encrypt_dir import DirEncript
@@ -65,20 +66,15 @@ MODES = ['CBC', 'OFB', 'CFB', 'GCM']
 DIGEST = ['SHA256', 'SHA512', 'BLAKE2b', 'SHA3_256', 'SHA3_512']
 
 
-# PODE SER ALTERADO PARA UMA PASSWORD
+# TODO PODE SER ALTERADO PARA UMA PASSWORD
 KEY = b'\xc4\x8e*&\xf2 \x9c\xdd\xfb7Z\xed\x0fm*\xed}}\x18\xc6!\xb2\x9e\x0b\xef\x88\x92\xbfs\x87L9'
 IV = b'\xb6^\xc9\xde\x1e\xe7\xa2<\x00<\x80w\x02\x1e\xee\xf7'
 
 class MediaServer(resource.Resource):
     isLeaf = True
     def __init__(self):
-        self.client_cipher = None
-        self.client_mode = None
-        self.client_digest = None
-        self.public_key = None
-        self.tag = None
-        self.client_authorizations = set()
-                
+        self.clients = {}
+
         self.file_encryptor = DirEncript()
         """ Usar quando ficheiros não estão cifrados """
         # self.file_encryptor.encrypt_catalog_chunks()
@@ -108,160 +104,159 @@ class MediaServer(resource.Resource):
         ).encode('latin')
     
     def client_protocols(self, request, data):
-        self.client_algorithm = data['algorithm']
-        self.client_mode = data['mode']
-        self.client_digest = data['digest']
         
-        self.set_hash_algo()
+        self.clients[request.getHeader('ip')]['client_algorithm'] = data['algorithm']
+        self.clients[request.getHeader('ip')]['client_mode'] = data['mode']
+        self.clients[request.getHeader('ip')]['client_digest'] = data['digest']
+        self.clients[request.getHeader('ip')]['tag'] = None
+
+        self.set_hash_algo(request.getHeader('ip'))
                 
-        logger.info(f'Client protocols: Cipher:{self.client_algorithm}; Mode:{self.client_mode}; Digest:{self.client_digest}')
+        logger.info(f'{request.getHeader("ip")} protocols: Cipher:{data["algorithm"]}; Mode:{data["mode"]}; Digest:{data["digest"]}')
         
     def dh_public_key(self, request, data):
         params_numbers = dh.DHParameterNumbers(data['p'], data['g'])
-        self.dh_parameters = params_numbers.parameters(default_backend())
+        dh_parameters = params_numbers.parameters(default_backend())
         
-        private_key = self.dh_parameters.generate_private_key()
+        self.clients[request.getHeader('ip')]['dh_parameters'] = dh_parameters
+        
+        private_key = dh_parameters.generate_private_key()
         
         client_pk_b = binascii.a2b_base64(data["pk"].encode('latin'))
         
         client_public_key = serialization.load_der_public_key(client_pk_b, backend=default_backend())
         
-        self.public_key_dh = private_key.public_key().public_bytes(
+        public_key_dh = private_key.public_key().public_bytes(
             encoding=serialization.Encoding.DER,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
         
         # chave comum a servidor e cliente
-        self.shared_key = private_key.exchange(client_public_key)
+        shared_key = private_key.exchange(client_public_key)
         
         logger.debug(f'Shared Key created sucessfully')
         
         # inicializar o processo de criar encriptador e decriptador
-        self.get_key()
+        self.clients[request.getHeader('ip')]['key'] = self.get_key(shared_key, request.getHeader('ip'))
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        return json.dumps({"key" : binascii.b2a_base64(self.public_key_dh).decode('latin').strip()}, indent=4).encode('latin')
+        return json.dumps({"key" : binascii.b2a_base64(public_key_dh).decode('latin').strip()}, indent=4).encode('latin')
     
     def rotate_key(self, request, data):
-        private_key = self.dh_parameters.generate_private_key()
+        private_key = self.clients[request.getHeader('ip')]['dh_parameters'].generate_private_key()
         
         client_pk_b = binascii.a2b_base64(data["pk"].encode('latin'))
         
         client_public_key = serialization.load_der_public_key(client_pk_b, backend=default_backend())
         
-        self.public_key_dh = private_key.public_key().public_bytes(
+        public_key_dh = private_key.public_key().public_bytes(
             encoding=serialization.Encoding.DER,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
         
-        self.shared_key = private_key.exchange(client_public_key)
+        shared_key = private_key.exchange(client_public_key)
         
         logger.debug(f'Succeded at rotating key')
         
-        self.get_key()
+        self.clients[request.getHeader('ip')]['key'] = self.get_key(shared_key, request.getHeader('ip'))
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        return json.dumps({"key" : binascii.b2a_base64(self.public_key_dh).decode('latin').strip()}, indent=4).encode('latin')
+        return json.dumps({"key" : binascii.b2a_base64(public_key_dh).decode('latin').strip()}, indent=4).encode('latin')
         
         
-    def get_key(self):
-        if self.client_algorithm == 'AES' or self.client_algorithm == 'ChaCha20':
-            self.key = self.derive_shared_key(self.hash_, 32, None, b'handshake data')
-        elif self.client_algorithm == '3DES':
-            self.key = self.derive_shared_key(self.hash_, 24, None, b'handshake data')
+    def get_key(self, shared_key, ip):
+        if self.clients[ip]['client_algorithm'] == 'AES' or self.clients[ip]['client_algorithm'] == 'ChaCha20':
+            return self.derive_shared_key(shared_key, self.clients[ip]['hash'], 32, None, b'handshake data')
+        elif self.clients[ip]['client_algorithm'] == '3DES':
+            return self.derive_shared_key(shared_key, self.clients[ip]['hash'], 24, None, b'handshake data')
         
-    def derive_shared_key(self, algorithm, length, salt, info):
-        # utilizar PBKDF2HMAC talvez seja mais seguro
+    def derive_shared_key(self, shared_key, algorithm, length, salt, info):
+        # TODO utilizar PBKDF2HMAC talvez seja mais seguro
         derived_key = HKDF(
             algorithm=algorithm,
             length=length,
             salt=salt,
             info=info,
-        ).derive(self.shared_key)
+            backend=default_backend()
+        ).derive(shared_key)
         
         return derived_key
     
-    def get_iv(self, bytes_=16):
-        self.iv = os.urandom(bytes_)
+    def get_iv(self, algo):
+        if algo == 'AES':
+            return os.urandom(16)
+        elif algo == '3DES':
+            return os.urandom(8)
+        
     
-    def get_mode(self, make_iv=False):
-        if self.client_algorithm == 'ChaCha20':
-            self.mode = None
-            return 
-        if make_iv:
-            if self.client_algorithm == 'AES':
-                self.get_iv()
-            elif self.client_algorithm == '3DES':
-                self.get_iv(8)
-                
-        if self.client_mode == 'CBC':
-            self.mode = modes.CBC(self.iv)
-        elif self.client_mode == 'OFB':
-            self.mode = modes.OFB(self.iv)
-        elif self.client_mode == 'CFB':
-            self.mode = modes.CFB(self.iv)
-        elif self.client_mode == 'GCM':
-            self.mode = modes.GCM(self.iv, self.tag)
+    def get_mode(self, mode, iv, tag):                
+        if mode == 'CBC':
+            return modes.CBC(iv)
+        elif mode == 'OFB':
+            return modes.OFB(iv)
+        elif mode == 'CFB':
+            return modes.CFB(iv)
+        elif mode == 'GCM':
+            return modes.GCM(iv, tag)
     
-    def get_algorithm(self):
-        if self.client_algorithm == 'AES':
-            self.algorithm = algorithms.AES(self.key)
-        elif self.client_algorithm == 'ChaCha20':
-            if not self.nonce:
-                self.nonce = os.urandom(16)
-            self.algorithm = algorithms.ChaCha20(self.key, self.nonce)
-        elif self.client_algorithm == '3DES':
-            self.algorithm = algorithms.TripleDES(self.key)
+    def get_algorithm(self, algo, key, nonce):
+        if algo == 'AES':
+            return algorithms.AES(key)
+        elif algo == 'ChaCha20':
+            return algorithms.ChaCha20(key, nonce)
+        elif algo == '3DES':
+            return algorithms.TripleDES(key)
             
-    def get_cipher(self):
-        self.cipher = Cipher(self.algorithm, mode=self.mode, backend=default_backend())
-
-    def get_encryptor(self):
-        self.encryptor = self.cipher.encryptor()
+    def get_encryptor(self, algorithm, mode):
+        cipher = Cipher(algorithm, mode=mode, backend=default_backend())
+        return cipher.encryptor()
         
-    def get_decryptor(self):
-        self.decryptor = self.cipher.decryptor()
+    def get_decryptor(self, algorithm, mode):
+        cipher = Cipher(algorithm, mode=mode, backend=default_backend())
+        return cipher.decryptor()
         
-    def set_hash_algo(self):
-        if self.client_digest == 'SHA256':
-            self.hash_ = hashes.SHA256()
-        elif self.client_digest == 'SHA512':
-            self.hash_ = hashes.SHA512()
-        elif self.client_digest == 'BLAKE2b':
-            self.hash_ = hashes.BLAKE2b(64)
-        elif self.client_digest == 'SHA3_256':
-            self.hash_ = hashes.SHA3_256()
-        elif self.client_digest == 'SHA3_512':
-            self.hash_ = hashes.SHA3_512()
+    def set_hash_algo(self, ip):
+        if self.clients[ip]['client_digest'] == 'SHA256':
+            self.clients[ip]['hash'] = hashes.SHA256()
+        elif self.clients[ip]['client_digest'] == 'SHA512':
+            self.clients[ip]['hash'] = hashes.SHA512()
+        elif self.clients[ip]['client_digest'] == 'BLAKE2b':
+            self.clients[ip]['hash'] = hashes.BLAKE2b(64)
+        elif self.clients[ip]['client_digest'] == 'SHA3_256':
+            self.clients[ip]['hash'] = hashes.SHA3_256()
+        elif self.clients[ip]['client_digest'] == 'SHA3_512':
+            self.clients[ip]['hash'] = hashes.SHA3_512()
         
-    def get_digest(self):
-        self.digest = hashes.Hash(self.hash_)   
+    def get_digest(self, ip):
+        return hashes.Hash(self.clients[ip]['hash'])   
         
-    def get_decryptor4msg(self):
-        self.get_mode()
-        self.get_algorithm()
-        self.get_cipher()
-        self.get_decryptor()
+    def get_decryptor4msg(self, tag, nonce, iv, ip):
+        mode = self.get_mode(self.clients[ip]['client_mode'], iv, tag)
+        algorithm = self.get_algorithm(self.clients[ip]['client_algorithm'], self.clients[ip]['key'], nonce)
+        return self.get_decryptor(algorithm, mode)
         
-    def block_size(self):
-        if self.client_algorithm == '3DES':
+    def block_size(self, algo):
+        if algo == '3DES':
             return 8
         return 16
         
-    def decrypt_message(self, data):
+    def decrypt_message(self, data, ip):
+        tag = None
+        nonce = None
+        iv = None
         if "tag" in data:
-            self.tag = binascii.a2b_base64(data["tag"].encode('latin'))
+            tag = binascii.a2b_base64(data["tag"].encode('latin'))
         if "nonce" in data:
-            self.nonce = binascii.a2b_base64(data["nonce"].encode('latin'))
+            nonce = binascii.a2b_base64(data["nonce"].encode('latin'))
         if "iv" in data:
-            self.iv = binascii.a2b_base64(data["iv"].encode('latin'))
+            iv = binascii.a2b_base64(data["iv"].encode('latin'))
             
-        self.get_decryptor4msg()
+        decryptor = self.get_decryptor4msg(tag, nonce, iv, ip)
         
         criptogram = binascii.a2b_base64(data["msg"].encode('latin'))
 
-        if self.client_algorithm == "ChaCha20":
-            return json.loads(self.decryptor.update(criptogram).decode('latin'))
+        if self.clients[ip]['client_algorithm'] == "ChaCha20":
+            return json.loads(decryptor.update(criptogram).decode('latin'))
 
-        block_size = self.block_size()
+        block_size = self.block_size(self.clients[ip]['client_algorithm'])
         text = b''
         last_block = criptogram[len(criptogram) - block_size :]
         criptogram = criptogram[:-block_size]
@@ -269,52 +264,58 @@ class MediaServer(resource.Resource):
         while True:
             portion = criptogram[:block_size]
             if len(portion) == 0:
-                dec = self.decryptor.update(last_block) + self.decryptor.finalize()
+                dec = decryptor.update(last_block) + decryptor.finalize()
                 text += dec[:block_size - dec[-1]]
                 break
             
-            text += self.decryptor.update(portion)
+            text += decryptor.update(portion)
             criptogram = criptogram[block_size:]
             
         return json.loads(text.decode('latin'))
     
-    def encrypt_message(self, msg):
+    def encrypt_message(self, msg, ip):
         data = json.dumps(msg).encode('latin')
-
-        if self.client_mode == "GCM":
-            self.tag = None
-            
-        if self.client_algorithm == "ChaCha20":
-            self.nonce = None
-
-        self.get_mode(True)
-        self.get_algorithm()
-        self.get_cipher()
-        self.get_encryptor()
-        blocksize = self.block_size()
         
-        if self.client_algorithm == "ChaCha20":
-            return self.encryptor.update(data), ""
+        client_algo = self.clients[ip]['client_algorithm']
+        client_mode = self.clients[ip]['client_mode']        
+        
+        nonce = None
+        tag = None
+        if client_algo == "ChaCha20":
+            nonce = os.urandom(16)
+        
+        mode = None
+        iv = None
+        if client_algo != 'Chacha20':
+            iv = self.get_iv(client_algo)
+            mode = self.get_mode(client_mode, iv, None)
+
+        algorithm = self.get_algorithm(client_algo, self.clients[ip]['key'], nonce)
+        encryptor = self.get_encryptor(algorithm, mode)
+
+        blocksize = self.block_size(client_algo)
+        
+        if client_algo == "ChaCha20":
+            return encryptor.update(data), iv, tag, nonce
 
         cripto = b''
         while True:
             portion = data[:blocksize]
             if len(portion) != blocksize:
                 portion = portion + bytes([blocksize - len(portion)] * (blocksize - len(portion)))
-                cripto += self.encryptor.update(portion) + self.encryptor.finalize()
+                cripto += encryptor.update(portion) + encryptor.finalize()
                 break
             
-            cripto += self.encryptor.update(portion)
+            cripto += encryptor.update(portion)
             data = data[blocksize:]
         
-        if self.client_mode == "GCM":
-            return cripto, self.encryptor.tag
+        if client_mode == "GCM":
+            tag = encryptor.tag
         
-        return cripto, ""
+        return cripto, iv, tag, nonce
     
-    # TODO alterar
-    def check_integrity(self, msg, mac):
-        h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
+    def check_integrity(self, msg, mac, ip):
+        h = hmac.HMAC(self.clients[ip]['key'], self.clients[ip]['hash'], backend = default_backend())
         h.update(binascii.a2b_base64(msg.encode('latin')))
 
         try:
@@ -327,13 +328,11 @@ class MediaServer(resource.Resource):
             return False
 
     def msg_received(self, request, data):
-        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        
         if data['type'] == 'msg':
-            if not self.check_integrity(data['msg'], data['mac']):
+            if not self.check_integrity(data['msg'], data['mac'], self.clients[request.getHeader('ip')]):
                 return self.send_response(request, "error", {'error' : "Corrupted message."})
                 
-            dic_text = self.decrypt_message(data)
+            dic_text = self.decrypt_message(data, request.getHeader('ip'))
             logger.info(f'Mensagem recebida: {dic_text}')
             
             msg = {"msg" : "Message is ok."}
@@ -342,9 +341,13 @@ class MediaServer(resource.Resource):
         
     
     def send_response(self, request, type_, resp):         
-        cripto, tag = self.encrypt_message(resp)
+        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+        ip = request.getHeader('ip')
+        client_algo = self.clients[ip]['client_algorithm']
         
-        h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
+        cripto, iv, tag, nonce  = self.encrypt_message(resp, ip)
+        
+        h = hmac.HMAC(self.clients[ip]['key'], self.clients[ip]['hash'], backend = default_backend())
         h.update(cripto)
         
         json_message = {
@@ -353,23 +356,24 @@ class MediaServer(resource.Resource):
                     "mac" : binascii.b2a_base64(h.finalize()).decode('latin').strip() 
                     }
         
-        if self.client_algorithm == "ChaCha20":
-            json_message["nonce"] = binascii.b2a_base64(self.nonce).decode('latin').strip()
+        if client_algo == "ChaCha20":
+            json_message["nonce"] = binascii.b2a_base64(nonce).decode('latin').strip()
         else:
-            json_message["iv"] = binascii.b2a_base64(self.iv).decode('latin').strip()
+            json_message["iv"] = binascii.b2a_base64(iv).decode('latin').strip()
                 
-            if self.client_mode == "GCM":
+            if self.clients[ip]['client_mode'] == "GCM":
                 json_message["tag"] = binascii.b2a_base64(tag).decode('latin').strip()
         
         return json.dumps(json_message).encode('latin')
     
     def authn_client(self, request, data):
-        return self.license(request, self.decrypt_message(data))
+        return self.license(request, self.decrypt_message(data, request.getHeader('ip')))
             
 
     def license(self, request, client_identifier):
         licenses = json.loads(self.file_encryptor.decrypt_file('./licenses.json').decode())
-            
+        ip = request.getHeader('ip')
+
         if client_identifier in licenses:
             diff = datetime.fromtimestamp(time.time()) - datetime.fromisoformat(licenses[client_identifier]['timestamp'])
             
@@ -377,7 +381,9 @@ class MediaServer(resource.Resource):
             if diff.seconds/60 <= 30:
                 # tem uma licenca valida
                 logger.info(f'O cliente {client_identifier} tem licenca')
-                return self.send_response(request, "sucess", binascii.b2a_base64(self.gen_code()).decode('latin').strip())
+
+                self.clients[ip]['code'] = os.urandom(16)
+                return self.send_response(request, "sucess", binascii.b2a_base64(self.clients[ip]['code']).decode('latin').strip())
         
         
         """ TODO falta fazer a autenticacao do cliente """
@@ -388,18 +394,10 @@ class MediaServer(resource.Resource):
         logger.info(f'Uma nova licenca foi criada para o cliente {client_identifier}')
             
         self.file_encryptor.encrypt_file('./licenses.json', json.dumps(licenses).encode())
-                
-        return self.send_response(request, "sucess", binascii.b2a_base64(self.gen_code()).decode('latin').strip())
+
+        self.clients[ip]['code'] = os.urandom(16)
+        return self.send_response(request, "sucess", binascii.b2a_base64(self.clients[ip]['code']).decode('latin').strip())
     
-    def gen_code(self):
-        code = None
-        while True:
-            code = os.urandom(32)
-            if not code in self.client_authorizations:
-                break
-            
-        self.client_authorizations.add(code)
-        return code
     
     """ Proj3 """
     def cert(self, request):
@@ -424,18 +422,51 @@ class MediaServer(resource.Resource):
             ),
             hashes.SHA256()
         )
-        
+    
+    def code_verify(self, code, ip):
+        h = hmac.HMAC(self.clients[ip]['key'], self.clients[ip]['hash'], backend=default_backend())
+        h.update(self.clients[ip]['code'])
+        try:
+            h.verify(code)
+            logger.info("Authorized.")
+            return True
+        except InvalidSignature:
+            logger.error("Invalid code - unauthorized.")
+            return False
+
+    def get_trusted_cas(self):
+    	# TODO falta encriptar e retirar todos os certs
+    	with open('./trusted_cas/cert.der', 'rb') as f:
+    		return x509.load_der_x509_certificate(f.read(), backend=default_backend())
+
+    def check_client_cert(self, request, data):
+    	request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+
+    	trusted = self.get_trusted_cas()
+
+    	client_chain_certs = [x509.load_der_x509_certificate(binascii.a2b_base64(c.encode('latin')), backend=default_backend()) for c in data]
+    	for cert in client_chain_certs:
+    		if cert.issuer == trusted.subject:
+    			logger.info('Valid certificate.')
+    			self.clients[request.getHeader('ip')] = {'cert' : client_chain_certs[0]}
+    			return json.dumps({'msg': 'Valid certificate'}).encode('latin')
+
+    	request.setResponseCode(406)
+
+    	logger.info('Invalid certificate.')
+    	return json.dumps({'msg': 'Invalid certificate'}).encode('latin')
+
+
     # Send the list of media files to clients
     def do_list(self, request):
     
         data = request.getHeader('Authorization')
         data = json.loads(data)
         
-        # TODO este código pode ser gerado a partir dum hmac
-        code = self.decrypt_message(data)
+        code = self.decrypt_message(data, request.getHeader('ip'))
         code = binascii.a2b_base64(code.encode('latin'))
         
-        if not code in self.client_authorizations:
+        if not self.code_verify(code, request.getHeader('ip')):
            request.setResponseCode(401)
            return self.send_response(request, "error", {'error': 'Not authorized'})
 
@@ -453,7 +484,6 @@ class MediaServer(resource.Resource):
                 })
 
         # Return list to client
-        # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         return self.send_response(request, "data_list", media_list)
 
     # Send a media chunk to the client
@@ -461,13 +491,11 @@ class MediaServer(resource.Resource):
         data = request.getHeader('Authorization')
         data = json.loads(data)
         
-        # TODO este código pode ser gerado a partir dum hmac
-        code = self.decrypt_message(data)
+        code = self.decrypt_message(data, request.getHeader('ip'))
         code = binascii.a2b_base64(code.encode('latin'))
         
-        if not code in self.client_authorizations:
+        if not self.code_verify(code, request.getHeader('ip')):
            request.setResponseCode(401)
-           logger.error('Invalid license')
            return self.send_response(request, "error", {'error': 'Not authorized'})
        
         logger.debug(f'Download: args: {request.args}')
@@ -511,12 +539,8 @@ class MediaServer(resource.Resource):
 
         # Open file, seek to correct position and return the chunk
         try:
-            # print(os.path.join('.', CATALOG_BASE, 'chunks', media_item['file_name'].split('.')[0] + '#' + str(offset)))
-            # TODO alterar path se funcionar
             data = self.file_encryptor.decrypt_file(os.path.join('.', CATALOG_BASE, 'chunks', media_item['file_name'].split('.')[0] + '#' + str(offset)))
 
-
-            # request.responseHeaders.addRawHeader(b"content-type", b"application/json")
             return self.send_response(request, "data_download", {
                 'media_id': media_id,
                 'chunk': chunk_id,
@@ -527,11 +551,15 @@ class MediaServer(resource.Resource):
         except :
             # File was not open?
             return self.send_response(request, "error", {'error': 'unknown'})
-                
+
     # Handle a GET request
     def render_GET(self, request):
         logger.debug(f'Received request for {request.uri}')
         # TODO informação sensível deve ir por POST
+        if not request.getHeader('ip') in self.clients:
+            request.setResponseCode(401)
+            request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+            return json.dumps({'msg' : 'Not authorized to view this content'}).encode('latin')
         try:
             if request.path == b'/api/protocols':
                 return self.do_get_protocols(request)
@@ -541,10 +569,6 @@ class MediaServer(resource.Resource):
                 return self.do_list(request)
             elif request.path == b'/api/download':
                 return self.do_download(request)
-            # elif request.path == b'/api/get_public_key_dh':
-            #     request.responseHeaders.addRawHeader(b"content-type", b'application/json')
-            #     return json.dumps(binascii.b2a_base64(self.public_key_dh).decode('latin').strip(), indent=4).encode('latin')
-
             else:
                 request.responseHeaders.addRawHeader(b"content-type", b'text/plain')
                 return b'Methods: /api/protocols /api/list /api/download'
@@ -564,24 +588,26 @@ class MediaServer(resource.Resource):
             if request.path == b'/api/protocol_choice':
                 ass_data = self.rsa_decrypt(content)
                 data = json.loads(ass_data.decode('latin'))
-                print(data)
                 self.client_protocols(request, data)
             elif request.path == b'/api/dh_client_public_key':
                 data = json.loads(content.decode('latin'))
-                print(data)
                 return self.dh_public_key(request, data)
             elif request.path == b'/api/msg':
                 data = json.loads(content.decode('latin'))
-                print(data)
+                if not self.check_integrity(data['msg'], data['mac'], request.getHeader('ip')):
+                    return self.send_response(request, "error", {'error': 'Corrupted Message'})
                 return self.msg_received(request, data)
             elif request.path == b'/api/authn':
                 data = json.loads(content.decode('latin'))
-                print(data)
+                if not self.check_integrity(data['msg'], data['mac'], request.getHeader('ip')):
+                    return self.send_response(request, "error", {'error': 'Corrupted Message'})
                 return self.authn_client(request, data)
             elif request.path == b'/api/rotatekey':
                 data = json.loads(content.decode('latin'))
-                print(data)
                 return self.rotate_key(request, data)
+            elif request.path == b'/api/hello':
+            	data = json.loads(content.decode('latin'))
+            	return self.check_client_cert(request, data)
         
         except Exception as e:
             logger.exception(e)

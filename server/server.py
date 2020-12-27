@@ -76,6 +76,7 @@ class MediaServer(resource.Resource):
         self.clients = {}
 
         self.file_encryptor = DirEncript()
+
         """ Usar quando ficheiros não estão cifrados """
         # self.file_encryptor.encrypt_catalog_chunks()
         # self.file_encryptor.encrypt_files()
@@ -83,7 +84,11 @@ class MediaServer(resource.Resource):
         
         """ Quando já estiverem cifrados """
         self.file_encryptor.load_keys_and_ivs(KEY, IV)
-
+        
+        """ Para decriptar os ficheiros """
+        # self.file_encryptor.load_keys_and_ivs(KEY, IV)
+        # self.file_encryptor.decrypt_files()
+        
         self.private_key = self.get_private_key()
             
     def get_private_key(self):
@@ -435,9 +440,10 @@ class MediaServer(resource.Resource):
             return False
 
     def get_trusted_cas(self):
-    	# TODO falta encriptar e retirar todos os certs
-    	with open('./trusted_cas/cert.der', 'rb') as f:
-    		return x509.load_der_x509_certificate(f.read(), backend=default_backend())
+        return [
+            x509.load_der_x509_certificate(self.file_encryptor.decrypt_file(f.path), backend=default_backend())
+            for f in os.scandir('./trusted_cas/')
+        ]
 
     def check_client_cert(self, request, data):
     	request.responseHeaders.addRawHeader(b"content-type", b"application/json")
@@ -446,10 +452,11 @@ class MediaServer(resource.Resource):
 
     	client_chain_certs = [x509.load_der_x509_certificate(binascii.a2b_base64(c.encode('latin')), backend=default_backend()) for c in data]
     	for cert in client_chain_certs:
-    		if cert.issuer == trusted.subject:
-    			logger.info('Valid certificate.')
-    			self.clients[request.getHeader('ip')] = {'cert' : client_chain_certs[0]}
-    			return json.dumps({'msg': 'Valid certificate'}).encode('latin')
+            for trust in trusted:
+                if cert.issuer == trust.subject:
+                    logger.info('Valid certificate.')
+                    self.clients[request.getHeader('ip')] = {'cert' : client_chain_certs[0]}
+                    return json.dumps({'msg': 'Valid certificate'}).encode('latin')
 
     	request.setResponseCode(406)
 

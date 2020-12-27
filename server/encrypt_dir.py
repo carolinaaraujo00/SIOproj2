@@ -48,6 +48,7 @@ class DirEncript:
     # encriptar todos os ficheiros
     def encrypt_files(self):
         files = [f.path for f in scandir('./certificate/')]
+        files.extend([f.path for f in scandir('./trusted_cas')])
         files.append('./licenses.json')
         for f in files:
             self.key = urandom(32)
@@ -87,8 +88,10 @@ class DirEncript:
             
     def decrypt_files(self):
         files = [f.path for f in scandir('./certificate/')]
+        files.extend([f.path for f in scandir('./trusted_cas')])
         files.append('./licenses.json')
         for f in files:
+            print(f'Decrypting {f}...')
             self.key = self.keysAndIvs[f]['key']
             self.iv = self.keysAndIvs[f]['iv']
             

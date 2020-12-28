@@ -498,8 +498,7 @@ class MediaServer(resource.Resource):
             return json.dumps({'msg' : 'Signature failed'}).encode('latin')
 
         self.clients[ip]['publicKey'] = serialization.load_pem_public_key(
-            msg,
-            password=None
+            msg
         )
         
         public_key, signature = self.make_ass_cipher_and_sign(ip)

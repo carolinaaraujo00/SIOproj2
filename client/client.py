@@ -467,10 +467,10 @@ class Client():
         )
         
         data = self.session_private_key.public_key().public_bytes(
-            encoding=serialization.Encoding.DER,
+            encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
-        
+                
         response = self.sendm_w_signature(data)
         if response.status_code != 200:
             logger.error(f'{response.json()["msg"]}')
@@ -484,8 +484,7 @@ class Client():
             exit(1)
             
         self.session_server_pub_k = serialization.load_pem_public_key(
-            pub_key,
-            password=None
+            pub_key
         )
         
     

@@ -397,8 +397,12 @@ class MediaServer(resource.Resource):
         return self.send_response(request, 'error', 'No license associated with this user.')
     
     def new_license(self, request):
-        #TODO verificar se o user já está autenticado
         ip = request.getHeader('ip')
+
+        # verificar se o user já está autenticado
+        if not ip in self.clients:
+            logger.error(f'Client with ip {ip} trying to get license is not authenticated.')
+            return self.send_response(request, 'error', 'Unauthorized to get license. Authenticate first')
         
         # emitir uma nova licenca
         licenses = json.loads(self.file_encryptor.decrypt_file('./licenses.json').decode())

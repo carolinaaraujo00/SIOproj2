@@ -36,7 +36,6 @@ DIGEST = ['SHA256', 'SHA512', 'BLAKE2b', 'SHA3_256', 'SHA3_512']
 
 class Client():
     def __init__(self):
-        
         self.ip = f'{random.randrange(256)}.{random.randrange(256)}.{random.randrange(256)}.{random.randrange(256)}'
 
         self.hardware_token = HardwareToken()

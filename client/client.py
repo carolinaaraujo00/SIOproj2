@@ -20,6 +20,9 @@ from cryptography.exceptions import InvalidSignature
 
 from hardware_token import HardwareToken
 
+# TODO APAGAR
+from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15
+
 logger = logging.getLogger('root')
 FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
 logging.basicConfig(format=FORMAT)
@@ -453,9 +456,8 @@ class Client():
         return True
     
     def sendm_w_signature(self, msg):
-
-        msg = binascii.b2a_base64(msg).decode('latin').strip()
         sign = self.hardware_token.sign(msg)
+        msg = binascii.b2a_base64(msg).decode('latin').strip()
         return self.send_to_server(f'{SERVER_URL}/api/publicKey', {'msg' : msg, 'signature' : sign}, False, False)
     
     def make_ass_cipher(self):
@@ -465,7 +467,7 @@ class Client():
         )
         
         data = self.session_private_key.public_key().public_bytes(
-            encoding=serialization.Encoding.PEM,
+            encoding=serialization.Encoding.DER,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
         

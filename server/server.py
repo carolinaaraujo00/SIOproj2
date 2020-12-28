@@ -455,7 +455,7 @@ class MediaServer(resource.Resource):
     	for cert in client_chain_certs:
             for trust in trusted:
                 if cert.issuer == trust.subject:
-                    logger.info('Valid certificate.')
+                    logger.info(f'Valid certificate.')
                     self.clients[request.getHeader('ip')] = {'cert' : client_chain_certs[0]}
                     return json.dumps({'msg': 'Valid certificate'}).encode('latin')
 
@@ -483,7 +483,7 @@ class MediaServer(resource.Resource):
         request.requestHeaders.addRawHeader(b'content-type', b'application/json')
 
         msg = binascii.a2b_base64(data['msg'].encode('latin'))
-        
+                
         try:
             result = self.clients[ip]['cert'].public_key().verify(
                 binascii.a2b_base64(data['signature'].encode('latin')),
@@ -491,8 +491,6 @@ class MediaServer(resource.Resource):
                 PKCS1v15(),
                 hashes.SHA1(),
             )
-            # TODO APAGAR RESULT 
-            print(result)
             logger.info('Assinatura válida.')
         except InvalidSignature:
             logger.error('ERRO: Conteúdo e/ou assinatura falharam na verificação.')

@@ -59,7 +59,7 @@ if __name__ == '__main__':
 
     b_cert = token.get_chain_certs()[0]
 
-    cert = x509.load_der_x509_certificate(b_cert, backend=default_backend())
+    cert = x509.load_der_x509_certificate(binascii.a2b_base64(b_cert.encode('latin')), backend=default_backend())
 
     content = b'ola            '
 
@@ -67,7 +67,7 @@ if __name__ == '__main__':
 
     try:
         result = cert.public_key().verify(
-            bytes(signature),
+            binascii.a2b_base64(signature.encode('latin')),
             content,
             PKCS1v15(),
             hashes.SHA1(),

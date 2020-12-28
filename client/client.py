@@ -405,12 +405,7 @@ class Client():
         if data['type'] == "data_list":
             return self.decrypt_message(data)
         elif data['type'] == 'data_download':
-            data = self.decrypt_message(data)
-            
-            # verificar a assinatura
-            if not self.verify(binascii.a2b_base64(data['data'].encode('latin')), binascii.a2b_base64(data['signature'].encode('latin'))):
-                return None
-            return data
+            return self.decrypt_message(data)
         elif data['type'] == "error":
             return self.decrypt_message(data)['error']
         else:

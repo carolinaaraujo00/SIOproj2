@@ -593,8 +593,7 @@ class MediaServer(resource.Resource):
             return self.send_response(request, "data_download", {
                 'media_id': media_id,
                 'chunk': chunk_id,
-                'data': binascii.b2a_base64(data).decode('latin').strip(),
-                'signature' : binascii.b2a_base64(self.sign(data)).decode('latin').strip() # dá para assinar porque o tamanho da chunk é inferior ao tamanho da key
+                'data': binascii.b2a_base64(data).decode('latin').strip()
             })
 
         except :

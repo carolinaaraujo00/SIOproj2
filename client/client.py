@@ -480,12 +480,15 @@ class Client():
         pub_key = binascii.a2b_base64(data['msg'].encode('latin'))
 
         if not self.verify(pub_key, binascii.a2b_base64(data['signature'].encode('latin'))):
+            logger.error('The signature verification for server public key failed.')
             print('Bye')
             exit(1)
             
         self.session_server_pub_k = serialization.load_pem_public_key(
             pub_key
         )
+        
+        logger.info('Public key received with sucess from server')
         
     
 def main():

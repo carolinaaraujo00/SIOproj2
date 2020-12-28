@@ -9,7 +9,7 @@ import sys
 import random
 
 from cryptography.hazmat.primitives import hashes, hmac
-from cryptography.hazmat.primitives.asymmetric import dh
+from cryptography.hazmat.primitives.asymmetric import dh, rsa
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
@@ -19,6 +19,9 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.exceptions import InvalidSignature
 
 from hardware_token import HardwareToken
+
+# TODO APAGAR
+from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15
 
 logger = logging.getLogger('root')
 FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
@@ -49,9 +52,9 @@ class Client():
             logger.error('Certificate of http server is not trusted')
             sys.exit(1)
 
-        self.make_ass_cipher()
-            
         logger.info('Certificate of http server is trusted')
+
+        self.make_ass_cipher()
                 
         self.tag = None
         self.chosen_mode = None
@@ -405,7 +408,7 @@ class Client():
             data = self.decrypt_message(data)
             
             # verificar a assinatura
-            if not self.verify_chunk(binascii.a2b_base64(data['data'].encode('latin')), binascii.a2b_base64(data['signature'].encode('latin'))):
+            if not self.verify(binascii.a2b_base64(data['data'].encode('latin')), binascii.a2b_base64(data['signature'].encode('latin'))):
                 return None
             return data
         elif data['type'] == "error":
@@ -434,7 +437,7 @@ class Client():
                 
         return ret
     
-    def verify_chunk(self, data, signature):
+    def verify(self, data, signature):
         try:
             self.cert.public_key().verify(
                 signature,
@@ -445,14 +448,47 @@ class Client():
                 ),
                 hashes.SHA256()
             )
+            logger.info('Valid signature')
         except InvalidSignature:
             logger.error('Signature of chunk not valid')
             return False
         
         return True
     
+    def sendm_w_signature(self, msg):
+        sign = self.hardware_token.sign(msg)
+        msg = binascii.b2a_base64(msg).decode('latin').strip()
+        return self.send_to_server(f'{SERVER_URL}/api/publicKey', {'msg' : msg, 'signature' : sign}, False, False)
+    
     def make_ass_cipher(self):
-        pass
+        self.session_private_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=2048
+        )
+        
+        data = self.session_private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+                
+        response = self.sendm_w_signature(data)
+        if response.status_code != 200:
+            logger.error(f'{response.json()["msg"]}')
+            exit(1)
+
+        data = response.json()
+        pub_key = binascii.a2b_base64(data['msg'].encode('latin'))
+
+        if not self.verify(pub_key, binascii.a2b_base64(data['signature'].encode('latin'))):
+            logger.error('The signature verification for server public key failed.')
+            print('Bye')
+            exit(1)
+            
+        self.session_server_pub_k = serialization.load_pem_public_key(
+            pub_key
+        )
+        
+        logger.info('Public key received with sucess from server')
         
     
 def main():

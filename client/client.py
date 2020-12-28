@@ -72,14 +72,43 @@ class Client():
         # derivar a chave partilhada de acordo com cifra utilizada
         self.get_key()
         
-        data = self.authn()
-        self.code = binascii.a2b_base64(self.decrypt_message(data).encode('latin'))
-        
+        self.code = self.license()
     
     # TODO alterar
-    def authn(self):
-        username = input('\nusername: ')
-        return self.send_msg('auth', f'{SERVER_URL}/api/authn', username)
+    def license(self):
+        data = self.send_msg('auth', f'{SERVER_URL}/api/authn', '')
+        
+        print(data)
+        
+        if not self.check_integrity(data['msg'], data['mac']):
+            return None
+
+        if data['type'] == 'sucess':
+            return binascii.a2b_base64(self.decrypt_message(data).encode('latin'))
+
+        logger.error(self.decrypt_message(data))
+
+        return self.new_license()
+
+    def new_license(self):
+        resp = ''
+        while True:
+            resp = input('Get new license(y/n)?')
+            
+            if resp.lower() in 'yn':
+                break
+        
+        if resp == 'y':
+            data = self.send_msg('newlicense', f'{SERVER_URL}/api/newlicense', '')
+            if data['type'] == 'error':
+                logger.error(self.decrypt_message(data))
+                exit(1)
+            return binascii.a2b_base64(self.decrypt_message(data).encode('latin'))
+
+        print('No license, no party...')
+        print('bye')
+        exit(0)
+            
 
     def get_protocols_from_server(self):
         req_protocols = requests.get(f'{SERVER_URL}/api/protocols', headers={'ip' : self.ip})

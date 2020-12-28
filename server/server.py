@@ -372,32 +372,39 @@ class MediaServer(resource.Resource):
         
         return json.dumps(json_message).encode('latin')
     
-    def authn_client(self, request, data):
-        return self.license(request, self.decrypt_message(data, request.getHeader('ip')))
+    def authn_client(self, request):
+        # TODO encriptar o ip TALVEZ
+        return self.license(request)
             
 
-    def license(self, request, client_identifier):
+    def license(self, request):
         licenses = json.loads(self.file_encryptor.decrypt_file('./licenses.json').decode())
         ip = request.getHeader('ip')
 
-        if client_identifier in licenses:
+        if ip in licenses:
             diff = datetime.fromtimestamp(time.time()) - datetime.fromisoformat(licenses[client_identifier]['timestamp'])
             
             # verificar se a licenca expirou
-            if diff.seconds/60 <= 30:
+            if diff.seconds/60 <= 5:
                 # tem uma licenca valida
                 logger.info(f'O cliente {client_identifier} tem licenca')
 
                 self.clients[ip]['code'] = os.urandom(16)
                 return self.send_response(request, "sucess", binascii.b2a_base64(self.clients[ip]['code']).decode('latin').strip())
-        
-        
-        """ TODO falta fazer a autenticacao do cliente """
-        
             
-        # teria de emitir uma nova licenca
-        licenses[client_identifier] = {'timestamp' : datetime.fromtimestamp(time.time()).__str__()}
-        logger.info(f'Uma nova licenca foi criada para o cliente {client_identifier}')
+            return self.send_response(request, 'error', 'The license expired.')
+
+        return self.send_response(request, 'error', 'No license associated with this user.')
+    
+    def new_license(self, request):
+        #TODO verificar se o user já está autenticado
+        ip = request.getHeader('ip')
+        
+        # emitir uma nova licenca
+        licenses = json.loads(self.file_encryptor.decrypt_file('./licenses.json').decode())
+        
+        licenses[request.getHeader('id')] = {'timestamp' : datetime.fromtimestamp(time.time()).__str__()}
+        logger.info(f'Uma nova licenca foi criada para o cliente {ip}')
             
         self.file_encryptor.encrypt_file('./licenses.json', json.dumps(licenses).encode())
 
@@ -647,9 +654,9 @@ class MediaServer(resource.Resource):
                 return self.msg_received(request, data)
             elif request.path == b'/api/authn':
                 data = json.loads(content.decode('latin'))
-                if not self.check_integrity(data['msg'], data['mac'], request.getHeader('ip')):
-                    return self.send_response(request, "error", {'error': 'Corrupted Message'})
-                return self.authn_client(request, data)
+                # if not self.check_integrity(data['msg'], data['mac'], request.getHeader('ip')):
+                #     return self.send_response(request, "error", {'error': 'Corrupted Message'})
+                return self.authn_client(request)
             elif request.path == b'/api/rotatekey':
                 data = json.loads(content.decode('latin'))
                 return self.rotate_key(request, data)
@@ -659,6 +666,8 @@ class MediaServer(resource.Resource):
             elif request.path == b'/api/publicKey':
                 data = json.loads(content.decode('latin'))
                 return self.receive_pub_key(request, data)
+            elif request.path == b'/api/newlicense':
+                return self.new_license(request)
         
         except Exception as e:
             logger.exception(e)

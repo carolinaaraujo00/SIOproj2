@@ -43,7 +43,7 @@ class Client():
 
         certs = self.hardware_token.get_chain_certs()
 
-        response = self.send_to_server(f'{SERVER_URL}/api/hello', certs, False, False)
+        response = self.send_to_server(f'{SERVER_URL}/api/hello', certs)
         logger.info(response.json()['msg'])
         if response.status_code != 200:
             exit(1)
@@ -62,7 +62,7 @@ class Client():
         chosen_protocols = self.choose_protocol()
         
         # enviar para o servidor os protocolos escolhidos
-        self.send_to_server(f'{SERVER_URL}/api/protocol_choice', chosen_protocols, False, False)
+        self.send_to_server(f'{SERVER_URL}/api/protocol_choice', chosen_protocols)
         
         self.set_hash_algo()
         
@@ -76,7 +76,7 @@ class Client():
     
     # TODO alterar
     def license(self):
-        data = self.send_msg('auth', f'{SERVER_URL}/api/authn', '')
+        data = self.send_msg('auth', f'{SERVER_URL}/api/license', '')
                 
         if not self.check_integrity(data['msg'], data['mac']):
             return None
@@ -155,13 +155,8 @@ class Client():
         print('###############################')            
         return list_[selection]
         
-    def send_to_server(self, uri, msg, bytes_=False, encript=True):
-        
-        if bytes_:
-            data = msg
-        else:
-            data = json.dumps(msg, indent=4).encode('latin')
-        
+    def send_to_server(self, uri, msg):
+        data = json.dumps(msg, indent=4).encode('latin')
         return requests.post(uri, data = data, headers={'ip' : self.ip})
         
     def dhe(self):
@@ -185,7 +180,7 @@ class Client():
             "pk" : binascii.b2a_base64(data).decode('latin').strip()
         }
         # enviar chave publica dh para o servidor        
-        request = self.send_to_server(f'{SERVER_URL}/api/dh_client_public_key', msg, False, False)
+        request = self.send_to_server(f'{SERVER_URL}/api/dh_client_public_key', msg)
         server_public_key = binascii.a2b_base64(request.json()['key'].encode('latin'))
         
         server_public_key = serialization.load_der_public_key(server_public_key, backend=default_backend())
@@ -204,7 +199,7 @@ class Client():
         )
         
         msg = {"pk" : binascii.b2a_base64(data).decode('latin').strip()}
-        request = self.send_to_server(f'{SERVER_URL}/api/rotatekey', msg, False, False)
+        request = self.send_to_server(f'{SERVER_URL}/api/rotatekey', msg)
         
         server_public_key = binascii.a2b_base64(request.json()['key'].encode('latin'))
         server_public_key = serialization.load_der_public_key(server_public_key, backend=default_backend())
@@ -396,7 +391,7 @@ class Client():
         if type_ == "header":
             return json.dumps(json_message)
                     
-        req = self.send_to_server(url, json_message, False, False)
+        req = self.send_to_server(url, json_message)
         
         if req.status_code == 200:
             return req.json()
@@ -471,7 +466,7 @@ class Client():
     def challenge(self):
         challenge = os.urandom(16)
 
-        response = self.send_to_server(f'{SERVER_URL}/api/challenge', {'msg' : binascii.b2a_base64(challenge).decode('latin').strip(), 'signature' : self.hardware_token.sign(challenge)}, False, False)
+        response = self.send_to_server(f'{SERVER_URL}/api/challenge', {'msg' : binascii.b2a_base64(challenge).decode('latin').strip(), 'signature' : self.hardware_token.sign(challenge)})
         if response.status_code != 200:
             logger.error(f'{response.json()["msg"]}')
             exit(1)
@@ -496,7 +491,7 @@ class Client():
 
         signature = self.hardware_token.sign(binascii.b2a_base64(signed_server_challenge.encode('latin')))
 
-        self.send_to_server(f'{SERVER_URL}/api/authenticate', {'signed_challenge' : signed_server_challenge, 'signature' : signature}, False, False)    
+        self.send_to_server(f'{SERVER_URL}/api/authenticate', {'signed_challenge' : signed_server_challenge, 'signature' : signature})    
 
 def main():
     print("|--------------------------------------|")

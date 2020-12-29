@@ -670,11 +670,11 @@ class MediaServer(resource.Resource):
                 if not self.check_integrity(data['msg'], data['mac'], request.getHeader('ip')):
                     return self.send_response(request, "error", {'error': 'Corrupted Message'})
                 return self.msg_received(request, data)
-            elif request.path == b'/api/authn':
+            elif request.path == b'/api/license':
                 data = json.loads(content.decode('latin'))
                 # if not self.check_integrity(data['msg'], data['mac'], request.getHeader('ip')):
                 #     return self.send_response(request, "error", {'error': 'Corrupted Message'})
-                return self.authn_client(request)
+                return self.license(request)
             elif request.path == b'/api/rotatekey':
                 data = json.loads(content.decode('latin'))
                 return self.rotate_key(request, data)

@@ -73,22 +73,27 @@ IV = b'\xb6^\xc9\xde\x1e\xe7\xa2<\x00<\x80w\x02\x1e\xee\xf7'
 
 class MediaServer(resource.Resource):
     isLeaf = True
-    def __init__(self):
+    def __init__(self, init_type='loaded'):
         self.clients = {}
 
         self.file_encryptor = DirEncript()
 
         """ Usar quando ficheiros não estão cifrados """
-        # self.file_encryptor.encrypt_catalog_chunks()
-        # self.file_encryptor.encrypt_files()
-        # self.file_encryptor.save_keys_and_ivs(KEY, IV)
+        if init_type == 'encrypt':
+            self.file_encryptor.encrypt_catalog_chunks()
+            self.file_encryptor.encrypt_files()
+            self.file_encryptor.save_keys_and_ivs(KEY, IV)
         
         """ Quando já estiverem cifrados """
-        self.file_encryptor.load_keys_and_ivs(KEY, IV)
+        if init_type == 'loaded':
+            self.file_encryptor.load_keys_and_ivs(KEY, IV)
         
         """ Para decriptar os ficheiros """
-        # self.file_encryptor.load_keys_and_ivs(KEY, IV)
-        # self.file_encryptor.decrypt_files()
+        if init_type == 'decrypt':
+            self.file_encryptor.load_keys_and_ivs(KEY, IV)
+            self.file_encryptor.decrypt_files()
+            print('Files decrypted. Soo bye bye...')
+            exit(0)
         
         self.private_key = self.get_private_key()
             
@@ -382,12 +387,13 @@ class MediaServer(resource.Resource):
         ip = request.getHeader('ip')
 
         if ip in licenses:
-            diff = datetime.fromtimestamp(time.time()) - datetime.fromisoformat(licenses[client_identifier]['timestamp'])
+            print(ip)
+            diff = datetime.fromtimestamp(time.time()) - datetime.fromisoformat(licenses[ip]['timestamp'])
             
             # verificar se a licenca expirou
-            if diff.seconds/60 <= 5:
+            if diff.seconds/60 <= 2:
                 # tem uma licenca valida
-                logger.info(f'O cliente {client_identifier} tem licenca')
+                logger.info(f'O cliente {ip} tem licenca')
 
                 self.clients[ip]['code'] = os.urandom(16)
                 return self.send_response(request, "sucess", binascii.b2a_base64(self.clients[ip]['code']).decode('latin').strip())
@@ -407,7 +413,7 @@ class MediaServer(resource.Resource):
         # emitir uma nova licenca
         licenses = json.loads(self.file_encryptor.decrypt_file('./licenses.json').decode())
         
-        licenses[request.getHeader('id')] = {'timestamp' : datetime.fromtimestamp(time.time()).__str__()}
+        licenses[ip] = {'timestamp' : datetime.fromtimestamp(time.time()).__str__()}
         logger.info(f'Uma nova licenca foi criada para o cliente {ip}')
             
         self.file_encryptor.encrypt_file('./licenses.json', json.dumps(licenses).encode())
@@ -681,7 +687,14 @@ class MediaServer(resource.Resource):
 
 print("Server started")
 print("URL is: http://IP:8080")
-
+""" Usar ficheiros encriptados """
 s = server.Site(MediaServer())
+
+""" Encriptar ficheiros """
+# s = server.Site(MediaServer('encrypt'))
+
+""" Decriptar ficheiros """
+# s = server.Site(MediaServer('decrypt'))
+
 reactor.listenTCP(8080, s)
 reactor.run()

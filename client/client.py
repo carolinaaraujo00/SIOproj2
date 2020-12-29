@@ -582,7 +582,7 @@ def main():
         req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'ip' : client.ip})
         
         if req.status_code != 200:
-            logger.info(client.msg_received(req.json())['error'])
+            logger.info(client.msg_received(req.json()))
             logger.info('Ending client session...')
             proc.kill()
             break

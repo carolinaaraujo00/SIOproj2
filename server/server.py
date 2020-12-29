@@ -76,6 +76,8 @@ class MediaServer(resource.Resource):
     def __init__(self, init_type='loaded'):
         self.clients = {}
 
+        self.can_download = set()
+
         self.file_encryptor = DirEncript()
 
         """ Usar quando ficheiros não estão cifrados """
@@ -387,7 +389,6 @@ class MediaServer(resource.Resource):
         ip = request.getHeader('ip')
 
         if ip in licenses:
-            print(ip)
             diff = datetime.fromtimestamp(time.time()) - datetime.fromisoformat(licenses[ip]['timestamp'])
             
             # verificar se a licenca expirou
@@ -536,6 +537,7 @@ class MediaServer(resource.Resource):
            request.setResponseCode(401)
            return self.send_response(request, "error", {'error': 'Not authorized'})
 
+        self.can_download.add(request.getHeader('ip'))
 
         # Build list
         media_list = []
@@ -554,6 +556,11 @@ class MediaServer(resource.Resource):
 
     # Send a media chunk to the client
     def do_download(self, request):       
+        if not request.getHeader('ip') in self.can_download:
+            request.setResponseCode(401)
+            logger.error(f'{request.getHeader("ip")} is not authorized to do download.')
+            return self.send_response(request, "error", {'error': 'Not authorized to do download.'})
+
         logger.debug(f'Download: args: {request.args}')
         
         media_id = request.args.get(b'id', [None])[0]
@@ -577,6 +584,7 @@ class MediaServer(resource.Resource):
 
         # Check if a chunk is valid
         chunk_id = request.args.get(b'chunk', [b'0'])[0]
+
         valid_chunk = False
         try:
             chunk_id = int(chunk_id.decode('latin'))
@@ -584,6 +592,10 @@ class MediaServer(resource.Resource):
                 valid_chunk = True
         except:
             logger.warn("Chunk format is invalid")
+
+        # remover cliente da lista de clientes que podem fazer download
+        if chunk_id == math.ceil(media_item['file_size'] / CHUNK_SIZE):
+            self.can_download.remove(request.getHeader('ip'))
 
         if not valid_chunk:
             request.setResponseCode(400)

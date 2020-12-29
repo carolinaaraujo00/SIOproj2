@@ -37,6 +37,7 @@ DIGEST = ['SHA256', 'SHA512', 'BLAKE2b', 'SHA3_256', 'SHA3_512']
 class Client():
     def __init__(self):
         self.ip = f'{random.randrange(256)}.{random.randrange(256)}.{random.randrange(256)}.{random.randrange(256)}'
+        # self.ip = "221.175.231.95"
 
         self.hardware_token = HardwareToken()
 
@@ -76,9 +77,7 @@ class Client():
     # TODO alterar
     def license(self):
         data = self.send_msg('auth', f'{SERVER_URL}/api/authn', '')
-        
-        print(data)
-        
+                
         if not self.check_integrity(data['msg'], data['mac']):
             return None
 
@@ -530,8 +529,12 @@ def main():
     h.update(client.code)
     req = requests.get(f'{SERVER_URL}/api/list', headers={'ip' : client.ip, 'Authorization' : client.send_msg("header", None, binascii.b2a_base64(h.finalize()).decode('latin').strip())})
     
-    if req.status_code == 200:
-        print("Got Server List")
+    if req.status_code != 200:
+        logger.info(client.msg_received(req.json()))
+        client.code = client.new_license()
+        h = hmac.HMAC(client.key, client.hash_, backend = default_backend())
+        h.update(client.code)
+        req = requests.get(f'{SERVER_URL}/api/list', headers={'ip' : client.ip, 'Authorization' : client.send_msg("header", None, binascii.b2a_base64(h.finalize()).decode('latin').strip())})
     
     media_list = client.msg_received(req.json())
     
@@ -574,19 +577,16 @@ def main():
     # Get data from server and send it to the ffplay stdin through a pipe
     for chunk in range(media_item['chunks'] + 1):
         # rodar chave a cada 10 chunks
-        if chunk%10 == 0:
-            client.rotate_key()
+        client.rotate_key()
 
-        h = hmac.HMAC(client.key, client.hash_, backend = default_backend())
-        h.update(client.code)
-        req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'ip' : client.ip, 'Authorization' : client.send_msg("header", None, binascii.b2a_base64(h.finalize()).decode('latin').strip())})
-        # req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'Authorization' : client.send_msg("header", None, binascii.b2a_base64(b'error').decode('latin').strip())})
-
-        if req.status_code == 401:
-            logger.error('License was not accepted')
+        req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'ip' : client.ip})
+        
+        if req.status_code != 200:
+            logger.info(client.msg_received(req.json())['error'])
+            logger.info('Ending client session...')
             proc.kill()
             break
-        
+                
         chunk = client.msg_received(req.json())
         
         try:

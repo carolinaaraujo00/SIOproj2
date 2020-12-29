@@ -391,7 +391,7 @@ class MediaServer(resource.Resource):
             diff = datetime.fromtimestamp(time.time()) - datetime.fromisoformat(licenses[ip]['timestamp'])
             
             # verificar se a licenca expirou
-            if diff.seconds/60 <= 2:
+            if diff.seconds/60 <= 7:
                 # tem uma licenca valida
                 logger.info(f'O cliente {ip} tem licenca')
 
@@ -553,17 +553,7 @@ class MediaServer(resource.Resource):
         return self.send_response(request, "data_list", media_list)
 
     # Send a media chunk to the client
-    def do_download(self, request):
-        data = request.getHeader('Authorization')
-        data = json.loads(data)
-        
-        code = self.decrypt_message(data, request.getHeader('ip'))
-        code = binascii.a2b_base64(code.encode('latin'))
-        
-        if not self.code_verify(code, request.getHeader('ip')):
-           request.setResponseCode(401)
-           return self.send_response(request, "error", {'error': 'Not authorized'})
-       
+    def do_download(self, request):       
         logger.debug(f'Download: args: {request.args}')
         
         media_id = request.args.get(b'id', [None])[0]

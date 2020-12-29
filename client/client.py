@@ -54,7 +54,7 @@ class Client():
 
         logger.info('Certificate of http server is trusted')
 
-        self.make_ass_cipher()
+        self.challenge()
                 
         self.tag = None
         self.chosen_mode = None
@@ -62,7 +62,7 @@ class Client():
         chosen_protocols = self.choose_protocol()
         
         # enviar para o servidor os protocolos escolhidos
-        self.send_to_server(f'{SERVER_URL}/api/protocol_choice', chosen_protocols)
+        self.send_to_server(f'{SERVER_URL}/api/protocol_choice', chosen_protocols, False, False)
         
         self.set_hash_algo()
         
@@ -162,15 +162,6 @@ class Client():
         else:
             data = json.dumps(msg, indent=4).encode('latin')
         
-        print(data)
-        if encript:
-            data = self.cert.public_key().encrypt(data, 
-                        padding = padding.OAEP(
-                            mgf=padding.MGF1(algorithm=self.cert.signature_hash_algorithm),
-                            algorithm=self.cert.signature_hash_algorithm,
-                            label=None
-                        )
-                    )        
         return requests.post(uri, data = data, headers={'ip' : self.ip})
         
     def dhe(self):
@@ -472,47 +463,41 @@ class Client():
             )
             logger.info('Valid signature')
         except InvalidSignature:
-            logger.error('Signature of chunk not valid')
+            logger.error('Signature failed')
             return False
         
         return True
-    
-    def sendm_w_signature(self, msg):
-        sign = self.hardware_token.sign(msg)
-        msg = binascii.b2a_base64(msg).decode('latin').strip()
-        return self.send_to_server(f'{SERVER_URL}/api/publicKey', {'msg' : msg, 'signature' : sign}, False, False)
-    
-    def make_ass_cipher(self):
-        self.session_private_key = rsa.generate_private_key(
-            public_exponent=65537,
-            key_size=2048
-        )
-        
-        data = self.session_private_key.public_key().public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo
-        )
                 
-        response = self.sendm_w_signature(data)
+    def challenge(self):
+        challenge = os.urandom(16)
+
+        response = self.send_to_server(f'{SERVER_URL}/api/challenge', {'msg' : binascii.b2a_base64(challenge).decode('latin').strip(), 'signature' : self.hardware_token.sign(challenge)}, False, False)
         if response.status_code != 200:
             logger.error(f'{response.json()["msg"]}')
             exit(1)
 
         data = response.json()
-        pub_key = binascii.a2b_base64(data['msg'].encode('latin'))
-
-        if not self.verify(pub_key, binascii.a2b_base64(data['signature'].encode('latin'))):
+        msg = binascii.a2b_base64(data['msg'].encode('latin'))
+        if not self.verify(msg, binascii.a2b_base64(data['signature'].encode('latin'))):
             logger.error('The signature verification for server public key failed.')
             print('Bye')
             exit(1)
             
-        self.session_server_pub_k = serialization.load_pem_public_key(
-            pub_key
-        )
+        data = json.loads(msg.decode('latin'))
         
-        logger.info('Public key received with sucess from server')
+        if self.verify(challenge, binascii.a2b_base64(data['signed_challenge'].encode('latin'))):
+            logger.info('Server signed correctly the challenge.')
+        else:
+            logger.info('The verification of the signed challenge failed.')
+            print('I\'m out. This connection isn\'t secure...')
+            exit(1)
         
-    
+        signed_server_challenge = self.hardware_token.sign(binascii.a2b_base64(data['server_challenge'].encode('latin')))
+
+        signature = self.hardware_token.sign(binascii.b2a_base64(signed_server_challenge.encode('latin')))
+
+        self.send_to_server(f'{SERVER_URL}/api/authenticate', {'signed_challenge' : signed_server_challenge, 'signature' : signature}, False, False)    
+
 def main():
     print("|--------------------------------------|")
     print("|         SECURE MEDIA CLIENT          |")

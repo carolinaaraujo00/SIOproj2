@@ -407,7 +407,7 @@ class MediaServer(resource.Resource):
         ip = request.getHeader('ip')
 
         # verificar se o user já está autenticado
-        if not ip in self.clients:
+        if not ip in self.clients and not self.clients[ip]['authenticated']:
             logger.error(f'Client with ip {ip} trying to get license is not authenticated.')
             return self.send_response(request, 'error', 'Unauthorized to get license. Authenticate first')
         
@@ -528,10 +528,7 @@ class MediaServer(resource.Resource):
             logger.info('Client signed correctly the challenge.')
             self.clients[ip]['authenticated'] = True
         else:
-            logger.info('The verification of the signed challenge failed.')
-            
-        print('ola')
-    
+            logger.info('The verification of the signed challenge failed.')    
    
     # Send the list of media files to clients
     def do_list(self, request):

@@ -73,22 +73,29 @@ IV = b'\xb6^\xc9\xde\x1e\xe7\xa2<\x00<\x80w\x02\x1e\xee\xf7'
 
 class MediaServer(resource.Resource):
     isLeaf = True
-    def __init__(self):
+    def __init__(self, init_type='loaded'):
         self.clients = {}
+
+        self.can_download = set()
 
         self.file_encryptor = DirEncript()
 
         """ Usar quando ficheiros não estão cifrados """
-        # self.file_encryptor.encrypt_catalog_chunks()
-        # self.file_encryptor.encrypt_files()
-        # self.file_encryptor.save_keys_and_ivs(KEY, IV)
+        if init_type == 'encrypt':
+            self.file_encryptor.encrypt_catalog_chunks()
+            self.file_encryptor.encrypt_files()
+            self.file_encryptor.save_keys_and_ivs(KEY, IV)
         
         """ Quando já estiverem cifrados """
-        self.file_encryptor.load_keys_and_ivs(KEY, IV)
+        if init_type == 'loaded':
+            self.file_encryptor.load_keys_and_ivs(KEY, IV)
         
         """ Para decriptar os ficheiros """
-        # self.file_encryptor.load_keys_and_ivs(KEY, IV)
-        # self.file_encryptor.decrypt_files()
+        if init_type == 'decrypt':
+            self.file_encryptor.load_keys_and_ivs(KEY, IV)
+            self.file_encryptor.decrypt_files()
+            print('Files decrypted. Soo bye bye...')
+            exit(0)
         
         self.private_key = self.get_private_key()
             
@@ -372,32 +379,43 @@ class MediaServer(resource.Resource):
         
         return json.dumps(json_message).encode('latin')
     
-    def authn_client(self, request, data):
-        return self.license(request, self.decrypt_message(data, request.getHeader('ip')))
+    def authn_client(self, request):
+        # TODO encriptar o ip TALVEZ
+        return self.license(request)
             
 
-    def license(self, request, client_identifier):
+    def license(self, request):
         licenses = json.loads(self.file_encryptor.decrypt_file('./licenses.json').decode())
         ip = request.getHeader('ip')
 
-        if client_identifier in licenses:
-            diff = datetime.fromtimestamp(time.time()) - datetime.fromisoformat(licenses[client_identifier]['timestamp'])
+        if ip in licenses:
+            diff = datetime.fromtimestamp(time.time()) - datetime.fromisoformat(licenses[ip]['timestamp'])
             
             # verificar se a licenca expirou
-            if diff.seconds/60 <= 30:
+            if diff.seconds/60 <= 7:
                 # tem uma licenca valida
-                logger.info(f'O cliente {client_identifier} tem licenca')
+                logger.info(f'O cliente {ip} tem licenca')
 
                 self.clients[ip]['code'] = os.urandom(16)
                 return self.send_response(request, "sucess", binascii.b2a_base64(self.clients[ip]['code']).decode('latin').strip())
-        
-        
-        """ TODO falta fazer a autenticacao do cliente """
-        
             
-        # teria de emitir uma nova licenca
-        licenses[client_identifier] = {'timestamp' : datetime.fromtimestamp(time.time()).__str__()}
-        logger.info(f'Uma nova licenca foi criada para o cliente {client_identifier}')
+            return self.send_response(request, 'error', 'The license expired.')
+
+        return self.send_response(request, 'error', 'No license associated with this user.')
+    
+    def new_license(self, request):
+        ip = request.getHeader('ip')
+
+        # verificar se o user já está autenticado
+        if not ip in self.clients:
+            logger.error(f'Client with ip {ip} trying to get license is not authenticated.')
+            return self.send_response(request, 'error', 'Unauthorized to get license. Authenticate first')
+        
+        # emitir uma nova licenca
+        licenses = json.loads(self.file_encryptor.decrypt_file('./licenses.json').decode())
+        
+        licenses[ip] = {'timestamp' : datetime.fromtimestamp(time.time()).__str__()}
+        logger.info(f'Uma nova licenca foi criada para o cliente {ip}')
             
         self.file_encryptor.encrypt_file('./licenses.json', json.dumps(licenses).encode())
 
@@ -519,6 +537,7 @@ class MediaServer(resource.Resource):
            request.setResponseCode(401)
            return self.send_response(request, "error", {'error': 'Not authorized'})
 
+        self.can_download.add(request.getHeader('ip'))
 
         # Build list
         media_list = []
@@ -536,17 +555,12 @@ class MediaServer(resource.Resource):
         return self.send_response(request, "data_list", media_list)
 
     # Send a media chunk to the client
-    def do_download(self, request):
-        data = request.getHeader('Authorization')
-        data = json.loads(data)
-        
-        code = self.decrypt_message(data, request.getHeader('ip'))
-        code = binascii.a2b_base64(code.encode('latin'))
-        
-        if not self.code_verify(code, request.getHeader('ip')):
-           request.setResponseCode(401)
-           return self.send_response(request, "error", {'error': 'Not authorized'})
-       
+    def do_download(self, request):       
+        if not request.getHeader('ip') in self.can_download:
+            request.setResponseCode(401)
+            logger.error(f'{request.getHeader("ip")} is not authorized to do download.')
+            return self.send_response(request, "error", {'error': 'Not authorized to do download.'})
+
         logger.debug(f'Download: args: {request.args}')
         
         media_id = request.args.get(b'id', [None])[0]
@@ -570,6 +584,7 @@ class MediaServer(resource.Resource):
 
         # Check if a chunk is valid
         chunk_id = request.args.get(b'chunk', [b'0'])[0]
+
         valid_chunk = False
         try:
             chunk_id = int(chunk_id.decode('latin'))
@@ -577,6 +592,10 @@ class MediaServer(resource.Resource):
                 valid_chunk = True
         except:
             logger.warn("Chunk format is invalid")
+
+        # remover cliente da lista de clientes que podem fazer download
+        if chunk_id == math.ceil(media_item['file_size'] / CHUNK_SIZE):
+            self.can_download.remove(request.getHeader('ip'))
 
         if not valid_chunk:
             request.setResponseCode(400)
@@ -647,9 +666,9 @@ class MediaServer(resource.Resource):
                 return self.msg_received(request, data)
             elif request.path == b'/api/authn':
                 data = json.loads(content.decode('latin'))
-                if not self.check_integrity(data['msg'], data['mac'], request.getHeader('ip')):
-                    return self.send_response(request, "error", {'error': 'Corrupted Message'})
-                return self.authn_client(request, data)
+                # if not self.check_integrity(data['msg'], data['mac'], request.getHeader('ip')):
+                #     return self.send_response(request, "error", {'error': 'Corrupted Message'})
+                return self.authn_client(request)
             elif request.path == b'/api/rotatekey':
                 data = json.loads(content.decode('latin'))
                 return self.rotate_key(request, data)
@@ -659,6 +678,8 @@ class MediaServer(resource.Resource):
             elif request.path == b'/api/publicKey':
                 data = json.loads(content.decode('latin'))
                 return self.receive_pub_key(request, data)
+            elif request.path == b'/api/newlicense':
+                return self.new_license(request)
         
         except Exception as e:
             logger.exception(e)
@@ -668,7 +689,14 @@ class MediaServer(resource.Resource):
 
 print("Server started")
 print("URL is: http://IP:8080")
-
+""" Usar ficheiros encriptados """
 s = server.Site(MediaServer())
+
+""" Encriptar ficheiros """
+# s = server.Site(MediaServer('encrypt'))
+
+""" Decriptar ficheiros """
+# s = server.Site(MediaServer('decrypt'))
+
 reactor.listenTCP(8080, s)
 reactor.run()

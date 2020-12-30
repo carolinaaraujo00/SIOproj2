@@ -119,6 +119,12 @@ class MediaServer(resource.Resource):
         return json.dumps({'msg' : msg.decode('latin'), 'signature' : binascii.b2a_base64(self.sign(msg)).decode('latin').strip()}).encode('latin')
     
     def client_protocols(self, request, data):
+                
+        msg = data['msg'].encode('latin')
+        if not self.verify(msg, binascii.a2b_base64(data['signature'].encode('latin')), request.getHeader('ip')):
+            logger.error('Signature failed when checking client protocols.')
+
+        data = json.loads(msg)
         
         self.clients[request.getHeader('ip')]['client_algorithm'] = data['algorithm']
         self.clients[request.getHeader('ip')]['client_mode'] = data['mode']

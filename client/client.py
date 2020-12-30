@@ -61,8 +61,10 @@ class Client():
         self.server_protocols = self.get_protocols_from_server()
         chosen_protocols = self.choose_protocol()
         
+        chosen_protocols = json.dumps(chosen_protocols).encode('latin')
+        
         # enviar para o servidor os protocolos escolhidos
-        self.send_to_server(f'{SERVER_URL}/api/protocol_choice', chosen_protocols)
+        self.send_to_server(f'{SERVER_URL}/api/protocol_choice', {'msg' : chosen_protocols.decode('latin'), 'signature' : self.hardware_token.sign(chosen_protocols)})
         
         self.set_hash_algo()
         

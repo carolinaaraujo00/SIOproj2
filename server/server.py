@@ -674,9 +674,6 @@ class MediaServer(resource.Resource):
             elif request.path == b'/api/dh_client_public_key':
                 data = json.loads(content.decode('latin'))
                 return self.dh_public_key(request, data)
-            elif request.path == b'/api/msg':
-                data = json.loads(content.decode('latin'))
-                return self.msg_received(request, data)
             elif request.path == b'/api/license':
                 data = json.loads(content.decode('latin'))
                 return self.license(request)

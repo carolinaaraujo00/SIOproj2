@@ -43,7 +43,7 @@ class Client():
 
         certs = self.hardware_token.get_chain_certs()
 
-        response = self.send_to_server(f'{SERVER_URL}/api/hello', certs, False, False)
+        response = self.send_to_server(f'{SERVER_URL}/api/hello', certs)
         logger.info(response.json()['msg'])
         if response.status_code != 200:
             exit(1)
@@ -54,15 +54,17 @@ class Client():
 
         logger.info('Certificate of http server is trusted')
 
-        self.make_ass_cipher()
+        self.challenge()
                 
         self.tag = None
         self.chosen_mode = None
         self.server_protocols = self.get_protocols_from_server()
         chosen_protocols = self.choose_protocol()
         
+        chosen_protocols = json.dumps(chosen_protocols).encode('latin')
+        
         # enviar para o servidor os protocolos escolhidos
-        self.send_to_server(f'{SERVER_URL}/api/protocol_choice', chosen_protocols)
+        self.send_to_server(f'{SERVER_URL}/api/protocol_choice', {'msg' : chosen_protocols.decode('latin'), 'signature' : self.hardware_token.sign(chosen_protocols)})
         
         self.set_hash_algo()
         
@@ -76,7 +78,7 @@ class Client():
     
     # TODO alterar
     def license(self):
-        data = self.send_msg('auth', f'{SERVER_URL}/api/authn', '')
+        data = self.send_msg('auth', f'{SERVER_URL}/api/license', '')
                 
         if not self.check_integrity(data['msg'], data['mac']):
             return None
@@ -113,7 +115,14 @@ class Client():
         if req_protocols.status_code == 200:
             logger.info('Got Protocols List')
 
-        protocols_avail = req_protocols.json()
+        data = req_protocols.json()
+        
+        protocols_avail = data['msg'].encode('latin')
+        if not self.verify(protocols_avail, binascii.a2b_base64(data['signature'].encode('latin'))):
+            logger.error('Signature failed when checking server protocols.')
+    
+        protocols_avail = json.loads(protocols_avail.decode('latin'))
+    
         logger.info(f'Available protocols in the server:\n\tAlgorithms: {protocols_avail["algorithms"]}\n\tModes: {protocols_avail["modes"]}\n\tDigests: {protocols_avail["digests"]}')
 
         return protocols_avail
@@ -155,22 +164,8 @@ class Client():
         print('###############################')            
         return list_[selection]
         
-    def send_to_server(self, uri, msg, bytes_=False, encript=True):
-        
-        if bytes_:
-            data = msg
-        else:
-            data = json.dumps(msg, indent=4).encode('latin')
-        
-        print(data)
-        if encript:
-            data = self.cert.public_key().encrypt(data, 
-                        padding = padding.OAEP(
-                            mgf=padding.MGF1(algorithm=self.cert.signature_hash_algorithm),
-                            algorithm=self.cert.signature_hash_algorithm,
-                            label=None
-                        )
-                    )        
+    def send_to_server(self, uri, msg):
+        data = json.dumps(msg, indent=4).encode('latin')
         return requests.post(uri, data = data, headers={'ip' : self.ip})
         
     def dhe(self):
@@ -188,13 +183,13 @@ class Client():
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
         
-        msg = {
+        msg = json.dumps({
             "p" : p,
             "g" : g,
             "pk" : binascii.b2a_base64(data).decode('latin').strip()
-        }
+        }).encode('latin')
         # enviar chave publica dh para o servidor        
-        request = self.send_to_server(f'{SERVER_URL}/api/dh_client_public_key', msg, False, False)
+        request = self.send_to_server(f'{SERVER_URL}/api/dh_client_public_key', {'msg' : msg.decode('latin'), 'signature' : self.hardware_token.sign(msg)})
         server_public_key = binascii.a2b_base64(request.json()['key'].encode('latin'))
         
         server_public_key = serialization.load_der_public_key(server_public_key, backend=default_backend())
@@ -213,9 +208,10 @@ class Client():
         )
         
         msg = {"pk" : binascii.b2a_base64(data).decode('latin').strip()}
-        request = self.send_to_server(f'{SERVER_URL}/api/rotatekey', msg, False, False)
-        
-        server_public_key = binascii.a2b_base64(request.json()['key'].encode('latin'))
+        response = self.send_msg('rotate', f'{SERVER_URL}/api/rotatekey', msg)
+        response = self.msg_received(response)
+
+        server_public_key = binascii.a2b_base64(response['key'].encode('latin'))
         server_public_key = serialization.load_der_public_key(server_public_key, backend=default_backend())
         
         self.shared_key = private_key.exchange(server_public_key)
@@ -381,7 +377,6 @@ class Client():
         
     # TODO mudar nome da funcao para ficar em conformidade com o facto de encriptar headers
     def send_msg(self, type_, url, msg):
-        logger.info(f'A enviar mensagem para servidor: {msg}')
         criptogram, tag = self.encrypt_message(msg)
         
         h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
@@ -405,12 +400,12 @@ class Client():
         if type_ == "header":
             return json.dumps(json_message)
                     
-        req = self.send_to_server(url, json_message, False, False)
+        req = self.send_to_server(url, json_message)
         
         if req.status_code == 200:
             return req.json()
         else:
-            logger.error('A resposta do servidor na foi ok')
+            logger.error('Response from server not ok')
             
     def check_integrity(self, msg, mac):
         h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
@@ -418,11 +413,11 @@ class Client():
 
         try:
             h.verify(binascii.a2b_base64(mac.encode('latin')))
-            logger.info("A mensagem chegou sem problemas :)")
+            logger.info("Integrity of message verified :)")
             return True
 
         except InvalidSignature:
-            logger.error("A mensagem foi corrompida a meio do caminho.")
+            logger.error("Received corrupted message :(")
             return False
             
     def msg_received(self, data):        
@@ -432,6 +427,8 @@ class Client():
         if data['type'] == "data_list":
             return self.decrypt_message(data)
         elif data['type'] == 'data_download':
+            return self.decrypt_message(data)
+        elif data['type'] == 'rotate':
             return self.decrypt_message(data)
         elif data['type'] == "error":
             return self.decrypt_message(data)['error']
@@ -472,47 +469,43 @@ class Client():
             )
             logger.info('Valid signature')
         except InvalidSignature:
-            logger.error('Signature of chunk not valid')
+            logger.error('Signature failed')
             return False
         
         return True
-    
-    def sendm_w_signature(self, msg):
-        sign = self.hardware_token.sign(msg)
-        msg = binascii.b2a_base64(msg).decode('latin').strip()
-        return self.send_to_server(f'{SERVER_URL}/api/publicKey', {'msg' : msg, 'signature' : sign}, False, False)
-    
-    def make_ass_cipher(self):
-        self.session_private_key = rsa.generate_private_key(
-            public_exponent=65537,
-            key_size=2048
-        )
-        
-        data = self.session_private_key.public_key().public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo
-        )
                 
-        response = self.sendm_w_signature(data)
+    def challenge(self):
+        challenge = os.urandom(16)
+
+        response = self.send_to_server(f'{SERVER_URL}/api/challenge', {'msg' : binascii.b2a_base64(challenge).decode('latin').strip(), 'signature' : self.hardware_token.sign(challenge)})
         if response.status_code != 200:
             logger.error(f'{response.json()["msg"]}')
             exit(1)
 
         data = response.json()
-        pub_key = binascii.a2b_base64(data['msg'].encode('latin'))
-
-        if not self.verify(pub_key, binascii.a2b_base64(data['signature'].encode('latin'))):
+        msg = binascii.a2b_base64(data['msg'].encode('latin'))
+        if not self.verify(msg, binascii.a2b_base64(data['signature'].encode('latin'))):
             logger.error('The signature verification for server public key failed.')
             print('Bye')
             exit(1)
             
-        self.session_server_pub_k = serialization.load_pem_public_key(
-            pub_key
-        )
+        data = json.loads(msg.decode('latin'))
         
-        logger.info('Public key received with sucess from server')
+        if self.verify(challenge, binascii.a2b_base64(data['signed_challenge'].encode('latin'))):
+            logger.info('Server signed correctly the challenge.')
+        else:
+            logger.info('The verification of the signed challenge failed.')
+            print('I\'m out. This connection isn\'t secure...')
+            exit(1)
         
-    
+        signed_server_challenge = self.hardware_token.sign(binascii.a2b_base64(data['server_challenge'].encode('latin')))
+
+        signed = binascii.a2b_base64(signed_server_challenge.encode('latin'))
+
+        signature = self.hardware_token.sign(signed)
+
+        self.send_to_server(f'{SERVER_URL}/api/authenticate', {'signed_challenge' : signed_server_challenge, 'signature' : signature})    
+
 def main():
     print("|--------------------------------------|")
     print("|         SECURE MEDIA CLIENT          |")

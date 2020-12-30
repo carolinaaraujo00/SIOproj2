@@ -108,15 +108,23 @@ class MediaServer(resource.Resource):
     
     def do_get_protocols(self, request):
         logger.debug(f'Client asked for protocols')
-        return json.dumps(
+        msg = json.dumps(
             {
                 'algorithms': ALGORITHMS, 
                 'modes': MODES, 
                 'digests': DIGEST
             },indent=4
         ).encode('latin')
+        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+        return json.dumps({'msg' : msg.decode('latin'), 'signature' : binascii.b2a_base64(self.sign(msg)).decode('latin').strip()}).encode('latin')
     
     def client_protocols(self, request, data):
+                
+        msg = data['msg'].encode('latin')
+        if not self.verify(msg, binascii.a2b_base64(data['signature'].encode('latin')), request.getHeader('ip')):
+            logger.error('Signature failed when checking client protocols.')
+
+        data = json.loads(msg.decode('latin'))
         
         self.clients[request.getHeader('ip')]['client_algorithm'] = data['algorithm']
         self.clients[request.getHeader('ip')]['client_mode'] = data['mode']
@@ -128,6 +136,12 @@ class MediaServer(resource.Resource):
         logger.info(f'{request.getHeader("ip")} protocols: Cipher:{data["algorithm"]}; Mode:{data["mode"]}; Digest:{data["digest"]}')
         
     def dh_public_key(self, request, data):
+        msg = data['msg'].encode('latin')
+        if not self.verify(msg, binascii.a2b_base64(data['signature'].encode('latin')), request.getHeader('ip')):
+            logger.error('Signature failed when checking client dh public key.')
+
+        data = json.loads(msg.decode('latin'))
+        
         params_numbers = dh.DHParameterNumbers(data['p'], data['g'])
         dh_parameters = params_numbers.parameters(default_backend())
         
@@ -151,6 +165,7 @@ class MediaServer(resource.Resource):
         
         # inicializar o processo de criar encriptador e decriptador
         self.clients[request.getHeader('ip')]['key'] = self.get_key(shared_key, request.getHeader('ip'))
+        self.clients[request.getHeader('ip')]['last_key'] = self.clients[request.getHeader('ip')]['key']
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         return json.dumps({"key" : binascii.b2a_base64(public_key_dh).decode('latin').strip()}, indent=4).encode('latin')
     
@@ -169,10 +184,9 @@ class MediaServer(resource.Resource):
         shared_key = private_key.exchange(client_public_key)
         
         logger.debug(f'Succeded at rotating key')
-        
+        self.clients[request.getHeader('ip')]['last_key'] = self.clients[request.getHeader('ip')]['key']
         self.clients[request.getHeader('ip')]['key'] = self.get_key(shared_key, request.getHeader('ip'))
-        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        return json.dumps({"key" : binascii.b2a_base64(public_key_dh).decode('latin').strip()}, indent=4).encode('latin')
+        return self.send_response(request, "rotate", {"key" : binascii.b2a_base64(public_key_dh).decode('latin').strip()})
         
         
     def get_key(self, shared_key, ip):
@@ -303,7 +317,11 @@ class MediaServer(resource.Resource):
             iv = self.get_iv(client_algo)
             mode = self.get_mode(client_mode, iv, None)
 
-        algorithm = self.get_algorithm(client_algo, self.clients[ip]['key'], nonce)
+        if self.clients[ip]['key'] == self.clients[ip]['last_key']:
+            algorithm = self.get_algorithm(client_algo, self.clients[ip]['key'], nonce)
+        else:
+            algorithm = self.get_algorithm(client_algo, self.clients[ip]['last_key'], nonce)
+
         encryptor = self.get_encryptor(algorithm, mode)
 
         blocksize = self.block_size(client_algo)
@@ -333,25 +351,12 @@ class MediaServer(resource.Resource):
 
         try:
             h.verify(binascii.a2b_base64(mac.encode('latin')))
-            logger.info("A mensagem chegou sem problemas :)")
+            logger.info("Integrity of message verified :)")
             return True
 
         except InvalidSignature:
-            logger.error("A mensagem foi corrompida a meio do caminho.")
-            return False
-
-    def msg_received(self, request, data):
-        if data['type'] == 'msg':
-            if not self.check_integrity(data['msg'], data['mac'], self.clients[request.getHeader('ip')]):
-                return self.send_response(request, "error", {'error' : "Corrupted message."})
-                
-            dic_text = self.decrypt_message(data, request.getHeader('ip'))
-            logger.info(f'Mensagem recebida: {dic_text}')
-            
-            msg = {"msg" : "Message is ok."}
-            
-            return self.send_response(request, msg)
-        
+            logger.error("Received corrupted message :(")
+            return False        
     
     def send_response(self, request, type_, resp):         
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
@@ -360,7 +365,12 @@ class MediaServer(resource.Resource):
         
         cripto, iv, tag, nonce  = self.encrypt_message(resp, ip)
         
-        h = hmac.HMAC(self.clients[ip]['key'], self.clients[ip]['hash'], backend = default_backend())
+        if self.clients[ip]['key'] == self.clients[ip]['last_key']:
+            h = hmac.HMAC(self.clients[ip]['key'], self.clients[ip]['hash'], backend = default_backend())
+        else:
+            h = hmac.HMAC(self.clients[ip]['last_key'], self.clients[ip]['hash'], backend = default_backend())
+            self.clients[ip]['last_key'] = self.clients[ip]['key']
+
         h.update(cripto)
         
         json_message = {
@@ -394,7 +404,7 @@ class MediaServer(resource.Resource):
             # verificar se a licenca expirou
             if diff.seconds/60 <= 7:
                 # tem uma licenca valida
-                logger.info(f'O cliente {ip} tem licenca')
+                logger.info(f'Client {ip} has license')
 
                 self.clients[ip]['code'] = os.urandom(16)
                 return self.send_response(request, "sucess", binascii.b2a_base64(self.clients[ip]['code']).decode('latin').strip())
@@ -407,7 +417,7 @@ class MediaServer(resource.Resource):
         ip = request.getHeader('ip')
 
         # verificar se o user já está autenticado
-        if not ip in self.clients:
+        if not ip in self.clients or not self.clients[ip]['authenticated']:
             logger.error(f'Client with ip {ip} trying to get license is not authenticated.')
             return self.send_response(request, 'error', 'Unauthorized to get license. Authenticate first')
         
@@ -415,7 +425,7 @@ class MediaServer(resource.Resource):
         licenses = json.loads(self.file_encryptor.decrypt_file('./licenses.json').decode())
         
         licenses[ip] = {'timestamp' : datetime.fromtimestamp(time.time()).__str__()}
-        logger.info(f'Uma nova licenca foi criada para o cliente {ip}')
+        logger.info(f'New license created for client {ip}')
             
         self.file_encryptor.encrypt_file('./licenses.json', json.dumps(licenses).encode())
 
@@ -474,55 +484,61 @@ class MediaServer(resource.Resource):
             for trust in trusted:
                 if cert.issuer == trust.subject:
                     logger.info(f'Valid certificate.')
-                    self.clients[request.getHeader('ip')] = {'cert' : client_chain_certs[0]}
+                    self.clients[request.getHeader('ip')] = {'cert' : client_chain_certs[0], 'authenticated' : False}
                     return json.dumps({'msg': 'Valid certificate'}).encode('latin')
 
     	request.setResponseCode(406)
 
     	logger.info('Invalid certificate.')
     	return json.dumps({'msg': 'Invalid certificate'}).encode('latin')
-
-    def make_ass_cipher_and_sign(self, ip):
-        priv_key = rsa.generate_private_key(
-            public_exponent=65537,
-            key_size=2048
-        )
-        
-        self.clients[ip]['sessionPrivKey'] = priv_key
-
-        pub_key = priv_key.public_key().public_bytes(
-                    encoding=serialization.Encoding.PEM,
-                    format=serialization.PublicFormat.SubjectPublicKeyInfo
+    
+    def verify(self, msg, signature, ip):
+        try:
+            result = self.clients[ip]['cert'].public_key().verify(
+                signature,
+                msg,
+                PKCS1v15(),
+                hashes.SHA1(),
             )
-        return binascii.b2a_base64(pub_key).decode('latin').strip(), binascii.b2a_base64(self.sign(pub_key)).decode('latin').strip()
+            logger.info('Valid signature.')
+        except InvalidSignature:
+            logger.error('ERROR: Invalid signature.')
+            return False
 
-    def receive_pub_key(self, request, data):
+        return True
+        
+    def challenge(self, request, data):
         ip = request.getHeader('ip')
         request.requestHeaders.addRawHeader(b'content-type', b'application/json')
 
         msg = binascii.a2b_base64(data['msg'].encode('latin'))
                 
-        try:
-            result = self.clients[ip]['cert'].public_key().verify(
-                binascii.a2b_base64(data['signature'].encode('latin')),
-                msg,
-                PKCS1v15(),
-                hashes.SHA1(),
-            )
-            logger.info('Assinatura válida.')
-        except InvalidSignature:
-            logger.error('ERRO: Conteúdo e/ou assinatura falharam na verificação.')
+        if not self.verify(msg, binascii.a2b_base64(data['signature'].encode('latin')), ip):
             request.setResponseCode(400)
             return json.dumps({'msg' : 'Signature failed'}).encode('latin')
 
-        self.clients[ip]['publicKey'] = serialization.load_pem_public_key(
-            msg
-        )
+        sign_challenge = self.sign(msg)
         
-        public_key, signature = self.make_ass_cipher_and_sign(ip)
+        server_challenge = os.urandom(16)
+        self.clients[ip]['server_challenge'] = server_challenge
         
-        return json.dumps({'msg' : public_key, 'signature' : signature}).encode('latin')
-    
+        msg = {'signed_challenge' : binascii.b2a_base64(sign_challenge).decode('latin').strip(), 'server_challenge' : binascii.b2a_base64(server_challenge).decode('latin').strip()}
+        msg = json.dumps(msg).encode('latin')
+                
+        return json.dumps({'msg' : binascii.b2a_base64(msg).decode('latin').strip(), 'signature' : binascii.b2a_base64(self.sign(msg)).decode('latin').strip()}).encode('latin')
+
+    def authenticate(self, request, data):
+        ip = request.getHeader('ip')
+
+        signed_challenge = binascii.a2b_base64(data['signed_challenge'].encode('latin'))
+        if not self.verify(signed_challenge, binascii.a2b_base64(data['signature'].encode('latin')), ip):
+            return
+        
+        if self.verify(self.clients[ip]['server_challenge'], signed_challenge, ip):
+            logger.info('Client signed correctly the challenge.')
+            self.clients[ip]['authenticated'] = True
+        else:
+            logger.info('The verification of the signed challenge failed.')    
    
     # Send the list of media files to clients
     def do_list(self, request):
@@ -653,31 +669,29 @@ class MediaServer(resource.Resource):
             content = request.content.getvalue()
             
             if request.path == b'/api/protocol_choice':
-                ass_data = self.rsa_decrypt(content)
-                data = json.loads(ass_data.decode('latin'))
+                data = json.loads(content.decode('latin'))
                 self.client_protocols(request, data)
             elif request.path == b'/api/dh_client_public_key':
                 data = json.loads(content.decode('latin'))
                 return self.dh_public_key(request, data)
-            elif request.path == b'/api/msg':
+            elif request.path == b'/api/license':
+                data = json.loads(content.decode('latin'))
+                return self.license(request)
+            elif request.path == b'/api/rotatekey':
                 data = json.loads(content.decode('latin'))
                 if not self.check_integrity(data['msg'], data['mac'], request.getHeader('ip')):
                     return self.send_response(request, "error", {'error': 'Corrupted Message'})
-                return self.msg_received(request, data)
-            elif request.path == b'/api/authn':
-                data = json.loads(content.decode('latin'))
-                # if not self.check_integrity(data['msg'], data['mac'], request.getHeader('ip')):
-                #     return self.send_response(request, "error", {'error': 'Corrupted Message'})
-                return self.authn_client(request)
-            elif request.path == b'/api/rotatekey':
-                data = json.loads(content.decode('latin'))
+                data = self.decrypt_message(data, request.getHeader('ip'))
                 return self.rotate_key(request, data)
             elif request.path == b'/api/hello':
             	data = json.loads(content.decode('latin'))
             	return self.check_client_cert(request, data)
-            elif request.path == b'/api/publicKey':
+            elif request.path == b'/api/challenge':
                 data = json.loads(content.decode('latin'))
-                return self.receive_pub_key(request, data)
+                return self.challenge(request, data)
+            elif request.path == b'/api/authenticate':
+                data = json.loads(content.decode('latin'))
+                self.authenticate(request, data)
             elif request.path == b'/api/newlicense':
                 return self.new_license(request)
         

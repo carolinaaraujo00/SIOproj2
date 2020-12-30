@@ -731,7 +731,7 @@ class MediaServer(resource.Resource):
 print("Server started")
 print("URL is: http://IP:8080")
 """ Usar ficheiros encriptados """
-# s = server.Site(MediaServer())
+s = server.Site(MediaServer())
 
 """ Encriptar ficheiros """
 # s = server.Site(MediaServer('encrypt'))

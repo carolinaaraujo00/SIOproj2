@@ -208,9 +208,10 @@ class Client():
         )
         
         msg = {"pk" : binascii.b2a_base64(data).decode('latin').strip()}
-        request = self.send_to_server(f'{SERVER_URL}/api/rotatekey', msg)
-        
-        server_public_key = binascii.a2b_base64(request.json()['key'].encode('latin'))
+        response = self.send_msg('rotate', f'{SERVER_URL}/api/rotatekey', msg)
+        response = self.msg_received(response)
+
+        server_public_key = binascii.a2b_base64(response['key'].encode('latin'))
         server_public_key = serialization.load_der_public_key(server_public_key, backend=default_backend())
         
         self.shared_key = private_key.exchange(server_public_key)
@@ -421,12 +422,15 @@ class Client():
             return False
             
     def msg_received(self, data):        
+        print(data)
         if not self.check_integrity(data['msg'], data['mac']):
             return None
         
         if data['type'] == "data_list":
             return self.decrypt_message(data)
         elif data['type'] == 'data_download':
+            return self.decrypt_message(data)
+        elif data['type'] == 'rotate':
             return self.decrypt_message(data)
         elif data['type'] == "error":
             return self.decrypt_message(data)['error']

@@ -165,6 +165,7 @@ class MediaServer(resource.Resource):
         
         # inicializar o processo de criar encriptador e decriptador
         self.clients[request.getHeader('ip')]['key'] = self.get_key(shared_key, request.getHeader('ip'))
+        self.clients[request.getHeader('ip')]['last_key'] = self.clients[request.getHeader('ip')]['key']
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         return json.dumps({"key" : binascii.b2a_base64(public_key_dh).decode('latin').strip()}, indent=4).encode('latin')
     
@@ -183,10 +184,9 @@ class MediaServer(resource.Resource):
         shared_key = private_key.exchange(client_public_key)
         
         logger.debug(f'Succeded at rotating key')
-        
+        self.clients[request.getHeader('ip')]['last_key'] = self.clients[request.getHeader('ip')]['key']
         self.clients[request.getHeader('ip')]['key'] = self.get_key(shared_key, request.getHeader('ip'))
-        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        return json.dumps({"key" : binascii.b2a_base64(public_key_dh).decode('latin').strip()}, indent=4).encode('latin')
+        return self.send_response(request, "rotate", {"key" : binascii.b2a_base64(public_key_dh).decode('latin').strip()})
         
         
     def get_key(self, shared_key, ip):
@@ -317,7 +317,11 @@ class MediaServer(resource.Resource):
             iv = self.get_iv(client_algo)
             mode = self.get_mode(client_mode, iv, None)
 
-        algorithm = self.get_algorithm(client_algo, self.clients[ip]['key'], nonce)
+        if self.clients[ip]['key'] == self.clients[ip]['last_key']:
+            algorithm = self.get_algorithm(client_algo, self.clients[ip]['key'], nonce)
+        else:
+            algorithm = self.get_algorithm(client_algo, self.clients[ip]['last_key'], nonce)
+
         encryptor = self.get_encryptor(algorithm, mode)
 
         blocksize = self.block_size(client_algo)
@@ -355,16 +359,14 @@ class MediaServer(resource.Resource):
             return False
 
     def msg_received(self, request, data):
-        if data['type'] == 'msg':
-            if not self.check_integrity(data['msg'], data['mac'], self.clients[request.getHeader('ip')]):
-                return self.send_response(request, "error", {'error' : "Corrupted message."})
-                
-            dic_text = self.decrypt_message(data, request.getHeader('ip'))
-            logger.info(f'Mensagem recebida: {dic_text}')
+        if not self.check_integrity(data['msg'], data['mac'], self.clients[request.getHeader('ip')]):
+            return self.send_response(request, "error", {'error' : "Corrupted message."})
             
-            msg = {"msg" : "Message is ok."}
-            
-            return self.send_response(request, msg)
+        logger.info(f'Mensagem recebida: {dic_text}')
+        
+        msg = {"msg" : "Message is ok."}
+        
+        return self.send_response(request, msg)
         
     
     def send_response(self, request, type_, resp):         
@@ -374,7 +376,12 @@ class MediaServer(resource.Resource):
         
         cripto, iv, tag, nonce  = self.encrypt_message(resp, ip)
         
-        h = hmac.HMAC(self.clients[ip]['key'], self.clients[ip]['hash'], backend = default_backend())
+        if self.clients[ip]['key'] == self.clients[ip]['last_key']:
+            h = hmac.HMAC(self.clients[ip]['key'], self.clients[ip]['hash'], backend = default_backend())
+        else:
+            h = hmac.HMAC(self.clients[ip]['last_key'], self.clients[ip]['hash'], backend = default_backend())
+            self.clients[ip]['last_key'] = self.clients[ip]['key']
+
         h.update(cripto)
         
         json_message = {
@@ -680,14 +687,15 @@ class MediaServer(resource.Resource):
                 return self.dh_public_key(request, data)
             elif request.path == b'/api/msg':
                 data = json.loads(content.decode('latin'))
-                if not self.check_integrity(data['msg'], data['mac'], request.getHeader('ip')):
-                    return self.send_response(request, "error", {'error': 'Corrupted Message'})
                 return self.msg_received(request, data)
             elif request.path == b'/api/license':
                 data = json.loads(content.decode('latin'))
                 return self.license(request)
             elif request.path == b'/api/rotatekey':
                 data = json.loads(content.decode('latin'))
+                if not self.check_integrity(data['msg'], data['mac'], request.getHeader('ip')):
+                    return self.send_response(request, "error", {'error': 'Corrupted Message'})
+                data = self.decrypt_message(data, request.getHeader('ip'))
                 return self.rotate_key(request, data)
             elif request.path == b'/api/hello':
             	data = json.loads(content.decode('latin'))

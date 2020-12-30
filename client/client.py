@@ -115,8 +115,8 @@ class Client():
 
         data = req_protocols.json()
         
-        protocols_avail = binascii.b2a_base64(data['msg'].encode('latin'))
-        if not self.verify(protocols_avail, binascii.b2a_base64(data['signature'].encode('latin'))):
+        protocols_avail = data['msg'].encode('latin')
+        if not self.verify(protocols_avail, binascii.a2b_base64(data['signature'].encode('latin'))):
             logger.error('Signature failed when checking server protocols.')
     
         protocols_avail = json.loads(protocols_avail.decode('latin'))

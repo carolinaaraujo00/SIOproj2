@@ -116,7 +116,7 @@ class MediaServer(resource.Resource):
             },indent=4
         ).encode('latin')
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
-        return json.dumps({'msg' : binascii.b2a_base64(msg).decode('latin').strip(), 'signature' : binascii.b2a_base64(self.sign(msg)).decode('latin').strip()}).encode('latin')
+        return json.dumps({'msg' : msg.decode('latin'), 'signature' : binascii.b2a_base64(self.sign(msg)).decode('latin').strip()}).encode('latin')
     
     def client_protocols(self, request, data):
         

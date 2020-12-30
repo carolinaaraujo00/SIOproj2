@@ -56,8 +56,6 @@ class Client():
 
         logger.info('Certificate of http server is trusted')
 
-        exit(0)
-
         self.challenge()
                 
         self.tag = None

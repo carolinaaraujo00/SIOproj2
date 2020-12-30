@@ -113,7 +113,14 @@ class Client():
         if req_protocols.status_code == 200:
             logger.info('Got Protocols List')
 
-        protocols_avail = req_protocols.json()
+        data = req_protocols.json()
+        
+        protocols_avail = binascii.b2a_base64(data['msg'].encode('latin'))
+        if not self.verify(protocols_avail, binascii.b2a_base64(data['signature'].encode('latin'))):
+            logger.error('Signature failed when checking server protocols.')
+    
+        protocols_avail = json.loads(protocols_avail.decode('latin'))
+    
         logger.info(f'Available protocols in the server:\n\tAlgorithms: {protocols_avail["algorithms"]}\n\tModes: {protocols_avail["modes"]}\n\tDigests: {protocols_avail["digests"]}')
 
         return protocols_avail
@@ -489,7 +496,9 @@ class Client():
         
         signed_server_challenge = self.hardware_token.sign(binascii.a2b_base64(data['server_challenge'].encode('latin')))
 
-        signature = self.hardware_token.sign(binascii.b2a_base64(signed_server_challenge.encode('latin')))
+        signed = binascii.a2b_base64(signed_server_challenge.encode('latin'))
+
+        signature = self.hardware_token.sign(signed)
 
         self.send_to_server(f'{SERVER_URL}/api/authenticate', {'signed_challenge' : signed_server_challenge, 'signature' : signature})    
 

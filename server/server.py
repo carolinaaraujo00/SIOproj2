@@ -108,13 +108,15 @@ class MediaServer(resource.Resource):
     
     def do_get_protocols(self, request):
         logger.debug(f'Client asked for protocols')
-        return json.dumps(
+        msg = json.dumps(
             {
                 'algorithms': ALGORITHMS, 
                 'modes': MODES, 
                 'digests': DIGEST
             },indent=4
         ).encode('latin')
+        request.responseHeaders.addRawHeader(b"content-type", b"application/json")
+        return json.dumps({'msg' : binascii.b2a_base64(msg).decode('latin').strip(), 'signature' : binascii.b2a_base64(self.sign(msg)).decode('latin').strip()}).encode('latin')
     
     def client_protocols(self, request, data):
         
@@ -407,7 +409,7 @@ class MediaServer(resource.Resource):
         ip = request.getHeader('ip')
 
         # verificar se o user já está autenticado
-        if not ip in self.clients and not self.clients[ip]['authenticated']:
+        if not ip in self.clients or not self.clients[ip]['authenticated']:
             logger.error(f'Client with ip {ip} trying to get license is not authenticated.')
             return self.send_response(request, 'error', 'Unauthorized to get license. Authenticate first')
         
@@ -520,8 +522,8 @@ class MediaServer(resource.Resource):
     def authenticate(self, request, data):
         ip = request.getHeader('ip')
 
-        signed_challenge = binascii.b2a_base64(data['signed_challenge'].encode('latin'))
-        if not self.verify(signed_challenge, binascii.b2a_base64(data['signature'].encode('latin')), ip):
+        signed_challenge = binascii.a2b_base64(data['signed_challenge'].encode('latin'))
+        if not self.verify(signed_challenge, binascii.a2b_base64(data['signature'].encode('latin')), ip):
             return
         
         if self.verify(self.clients[ip]['server_challenge'], signed_challenge, ip):
@@ -659,7 +661,6 @@ class MediaServer(resource.Resource):
             content = request.content.getvalue()
             
             if request.path == b'/api/protocol_choice':
-                # ass_data = self.rsa_decrypt(content)
                 data = json.loads(content.decode('latin'))
                 self.client_protocols(request, data)
             elif request.path == b'/api/dh_client_public_key':
@@ -672,8 +673,6 @@ class MediaServer(resource.Resource):
                 return self.msg_received(request, data)
             elif request.path == b'/api/license':
                 data = json.loads(content.decode('latin'))
-                # if not self.check_integrity(data['msg'], data['mac'], request.getHeader('ip')):
-                #     return self.send_response(request, "error", {'error': 'Corrupted Message'})
                 return self.license(request)
             elif request.path == b'/api/rotatekey':
                 data = json.loads(content.decode('latin'))

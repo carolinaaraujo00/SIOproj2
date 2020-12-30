@@ -8,6 +8,7 @@ import json
 import os
 import math
 
+import getpass
 from datetime import datetime
 import time
 
@@ -85,20 +86,36 @@ class MediaServer(resource.Resource):
         if init_type == 'encrypt':
             self.file_encryptor.encrypt_catalog_chunks()
             self.file_encryptor.encrypt_files()
-            self.file_encryptor.save_keys_and_ivs(KEY, IV)
+            print('Please choose carefully the password.')
+            key = self.encrypt_password()
+            self.file_encryptor.save_keys_and_ivs(key, IV)
+            logger.info('Files are secured')
         
         """ Quando já estiverem cifrados """
         if init_type == 'loaded':
-            self.file_encryptor.load_keys_and_ivs(KEY, IV)
+            print('Password to decrypt files...')
+            key = self.encrypt_password()
+            self.file_encryptor.load_keys_and_ivs(key, IV)
+            logger.info('Ready to start')
         
         """ Para decriptar os ficheiros """
         if init_type == 'decrypt':
-            self.file_encryptor.load_keys_and_ivs(KEY, IV)
+            print('Password to decrypt files...')
+            key = self.encrypt_password()
+            self.file_encryptor.load_keys_and_ivs(key, IV)
             self.file_encryptor.decrypt_files()
             print('Files decrypted. Soo bye bye...')
             exit(0)
         
         self.private_key = self.get_private_key()
+        
+    def encrypt_password(self):
+        try:
+            password = getpass.getpass(prompt='Enter Password: ')
+        except Exception as err:
+            print('ERROR:', err)
+
+        return self.derive_shared_key(str.encode(password), hashes.SHA256(), 32, None, b'password')
             
     def get_private_key(self):
         return serialization.load_pem_private_key(
@@ -714,7 +731,7 @@ class MediaServer(resource.Resource):
 print("Server started")
 print("URL is: http://IP:8080")
 """ Usar ficheiros encriptados """
-s = server.Site(MediaServer())
+# s = server.Site(MediaServer())
 
 """ Encriptar ficheiros """
 # s = server.Site(MediaServer('encrypt'))

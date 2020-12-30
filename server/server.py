@@ -351,23 +351,12 @@ class MediaServer(resource.Resource):
 
         try:
             h.verify(binascii.a2b_base64(mac.encode('latin')))
-            logger.info("A mensagem chegou sem problemas :)")
+            logger.info("Integrity of message verified :)")
             return True
 
         except InvalidSignature:
-            logger.error("A mensagem foi corrompida a meio do caminho.")
-            return False
-
-    def msg_received(self, request, data):
-        if not self.check_integrity(data['msg'], data['mac'], self.clients[request.getHeader('ip')]):
-            return self.send_response(request, "error", {'error' : "Corrupted message."})
-            
-        logger.info(f'Mensagem recebida: {dic_text}')
-        
-        msg = {"msg" : "Message is ok."}
-        
-        return self.send_response(request, msg)
-        
+            logger.error("Received corrupted message :(")
+            return False        
     
     def send_response(self, request, type_, resp):         
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
@@ -415,7 +404,7 @@ class MediaServer(resource.Resource):
             # verificar se a licenca expirou
             if diff.seconds/60 <= 7:
                 # tem uma licenca valida
-                logger.info(f'O cliente {ip} tem licenca')
+                logger.info(f'Client {ip} has license')
 
                 self.clients[ip]['code'] = os.urandom(16)
                 return self.send_response(request, "sucess", binascii.b2a_base64(self.clients[ip]['code']).decode('latin').strip())
@@ -436,7 +425,7 @@ class MediaServer(resource.Resource):
         licenses = json.loads(self.file_encryptor.decrypt_file('./licenses.json').decode())
         
         licenses[ip] = {'timestamp' : datetime.fromtimestamp(time.time()).__str__()}
-        logger.info(f'Uma nova licenca foi criada para o cliente {ip}')
+        logger.info(f'New license created for client {ip}')
             
         self.file_encryptor.encrypt_file('./licenses.json', json.dumps(licenses).encode())
 
@@ -511,9 +500,9 @@ class MediaServer(resource.Resource):
                 PKCS1v15(),
                 hashes.SHA1(),
             )
-            logger.info('Assinatura válida.')
+            logger.info('Valid signature.')
         except InvalidSignature:
-            logger.error('ERRO: Conteúdo e/ou assinatura falharam na verificação.')
+            logger.error('ERROR: Invalid signature.')
             return False
 
         return True

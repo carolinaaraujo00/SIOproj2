@@ -377,7 +377,6 @@ class Client():
         
     # TODO mudar nome da funcao para ficar em conformidade com o facto de encriptar headers
     def send_msg(self, type_, url, msg):
-        logger.info(f'A enviar mensagem para servidor: {msg}')
         criptogram, tag = self.encrypt_message(msg)
         
         h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
@@ -406,7 +405,7 @@ class Client():
         if req.status_code == 200:
             return req.json()
         else:
-            logger.error('A resposta do servidor na foi ok')
+            logger.error('Response from server not ok')
             
     def check_integrity(self, msg, mac):
         h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
@@ -414,15 +413,14 @@ class Client():
 
         try:
             h.verify(binascii.a2b_base64(mac.encode('latin')))
-            logger.info("A mensagem chegou sem problemas :)")
+            logger.info("Integrity of message verified :)")
             return True
 
         except InvalidSignature:
-            logger.error("A mensagem foi corrompida a meio do caminho.")
+            logger.error("Received corrupted message :(")
             return False
             
     def msg_received(self, data):        
-        print(data)
         if not self.check_integrity(data['msg'], data['mac']):
             return None
         

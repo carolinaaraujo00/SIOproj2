@@ -183,13 +183,13 @@ class Client():
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
         
-        msg = {
+        msg = json.dumps({
             "p" : p,
             "g" : g,
             "pk" : binascii.b2a_base64(data).decode('latin').strip()
-        }
+        }).encode('latin')
         # enviar chave publica dh para o servidor        
-        request = self.send_to_server(f'{SERVER_URL}/api/dh_client_public_key', msg)
+        request = self.send_to_server(f'{SERVER_URL}/api/dh_client_public_key', {'msg' : msg.decode('latin'), 'signature' : self.hardware_token.sign(msg)})
         server_public_key = binascii.a2b_base64(request.json()['key'].encode('latin'))
         
         server_public_key = serialization.load_der_public_key(server_public_key, backend=default_backend())

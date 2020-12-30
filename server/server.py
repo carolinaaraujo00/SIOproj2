@@ -124,7 +124,7 @@ class MediaServer(resource.Resource):
         if not self.verify(msg, binascii.a2b_base64(data['signature'].encode('latin')), request.getHeader('ip')):
             logger.error('Signature failed when checking client protocols.')
 
-        data = json.loads(msg)
+        data = json.loads(msg.decode('latin'))
         
         self.clients[request.getHeader('ip')]['client_algorithm'] = data['algorithm']
         self.clients[request.getHeader('ip')]['client_mode'] = data['mode']
@@ -136,6 +136,12 @@ class MediaServer(resource.Resource):
         logger.info(f'{request.getHeader("ip")} protocols: Cipher:{data["algorithm"]}; Mode:{data["mode"]}; Digest:{data["digest"]}')
         
     def dh_public_key(self, request, data):
+        msg = data['msg'].encode('latin')
+        if not self.verify(msg, binascii.a2b_base64(data['signature'].encode('latin')), request.getHeader('ip')):
+            logger.error('Signature failed when checking client dh public key.')
+
+        data = json.loads(msg.decode('latin'))
+        
         params_numbers = dh.DHParameterNumbers(data['p'], data['g'])
         dh_parameters = params_numbers.parameters(default_backend())
         

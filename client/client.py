@@ -7,6 +7,7 @@ import subprocess
 import time
 import sys
 import random
+import datetime
 
 from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.asymmetric import dh, rsa
@@ -17,6 +18,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.exceptions import InvalidSignature
+from cryptography.x509.oid import NameOID
 
 from hardware_token import HardwareToken
 
@@ -438,16 +440,36 @@ class Client():
     """ Proj3 """
     def trust_server(self):
         response = requests.get(f'{SERVER_URL}/api/cert', headers={'ip' : self.ip})
-        cert = binascii.a2b_base64(response.json()['cert'].encode('latin'))
+        data = response.json()
+        cert = binascii.a2b_base64(data['cert'].encode('latin'))
         self.cert = x509.load_pem_x509_certificate(cert, backend = default_backend())
 
-        # TODO fazer corrente de CA's
         for c in self.trusted_ca():
             if self.cert.issuer == c.subject:
-                return True
+                logger.info(f'A trusted certificate has been found.')
+                if self.cert_is_valid(self.cert):
+                    if self.cert_check_CN(self.cert, data['server_name']):
+                        return True
         
         return False
 
+    def cert_is_valid(self, certificate):
+        now = datetime.datetime.now()
+        logger.info(f'Certificate validity: valid not before {certificate.not_valid_before} and not after {certificate.not_valid_after}')
+        if certificate.not_valid_before < now and now < certificate.not_valid_after:
+            logger.info('Valid certificate')
+            return True
+        return False
+    
+    def cert_check_CN(self, cert, server_name):
+        cert_name = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+        logger.info(f'The common name of certificate is {cert_name} and the server name {server_name}.')
+        if cert_name == server_name:
+            logger.info('Common name of cert and server name are consistent, meaning valid.')
+            return True
+        
+        return False
+    
     def trusted_ca(self):
         ret = []
         for f in os.scandir('./trusted_ca'):

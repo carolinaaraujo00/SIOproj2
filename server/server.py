@@ -8,6 +8,7 @@ import json
 import os
 import math
 
+import getpass
 from datetime import datetime
 import time
 
@@ -74,6 +75,7 @@ IV = b'\xb6^\xc9\xde\x1e\xe7\xa2<\x00<\x80w\x02\x1e\xee\xf7'
 class MediaServer(resource.Resource):
     isLeaf = True
     def __init__(self, init_type='loaded'):
+        self.name = 'SIO_Server'
         self.clients = {}
 
         self.can_download = set()
@@ -84,20 +86,36 @@ class MediaServer(resource.Resource):
         if init_type == 'encrypt':
             self.file_encryptor.encrypt_catalog_chunks()
             self.file_encryptor.encrypt_files()
-            self.file_encryptor.save_keys_and_ivs(KEY, IV)
+            print('Please choose carefully the password.')
+            key = self.encrypt_password()
+            self.file_encryptor.save_keys_and_ivs(key, IV)
+            logger.info('Files are secured')
         
         """ Quando já estiverem cifrados """
         if init_type == 'loaded':
-            self.file_encryptor.load_keys_and_ivs(KEY, IV)
+            print('Password to decrypt files...')
+            key = self.encrypt_password()
+            self.file_encryptor.load_keys_and_ivs(key, IV)
+            logger.info('Ready to start')
         
         """ Para decriptar os ficheiros """
         if init_type == 'decrypt':
-            self.file_encryptor.load_keys_and_ivs(KEY, IV)
+            print('Password to decrypt files...')
+            key = self.encrypt_password()
+            self.file_encryptor.load_keys_and_ivs(key, IV)
             self.file_encryptor.decrypt_files()
             print('Files decrypted. Soo bye bye...')
             exit(0)
         
         self.private_key = self.get_private_key()
+        
+    def encrypt_password(self):
+        try:
+            password = getpass.getpass(prompt='Enter Password: ')
+        except Exception as err:
+            print('ERROR:', err)
+
+        return self.derive_shared_key(str.encode(password), hashes.SHA256(), 32, None, b'password')
             
     def get_private_key(self):
         return serialization.load_pem_private_key(
@@ -437,7 +455,7 @@ class MediaServer(resource.Resource):
     def cert(self, request):
         request.responseHeaders.addRawHeader(b"content-type", b"application/json")
         
-        return json.dumps({'cert' : binascii.b2a_base64(self.file_encryptor.decrypt_file('./certificate/SIO_Server.crt')).decode('latin').strip()}, indent=4).encode('latin')
+        return json.dumps({'cert' : binascii.b2a_base64(self.file_encryptor.decrypt_file('./certificate/SIO_Server.crt')).decode('latin').strip(), 'server_name' : self.name}, indent=4).encode('latin')
         
     def rsa_decrypt(self, content):
         return self.private_key.decrypt(content,
@@ -483,14 +501,23 @@ class MediaServer(resource.Resource):
     	for cert in client_chain_certs:
             for trust in trusted:
                 if cert.issuer == trust.subject:
-                    logger.info(f'Valid certificate.')
-                    self.clients[request.getHeader('ip')] = {'cert' : client_chain_certs[0], 'authenticated' : False}
-                    return json.dumps({'msg': 'Valid certificate'}).encode('latin')
+                    if self.cert_is_valid(client_chain_certs[0]):
+                        logger.info(f'Valid certificate.')
+                        self.clients[request.getHeader('ip')] = {'cert' : client_chain_certs[0], 'authenticated' : False}
+                        return json.dumps({'msg': 'Valid certificate'}).encode('latin')
 
     	request.setResponseCode(406)
 
     	logger.info('Invalid certificate.')
     	return json.dumps({'msg': 'Invalid certificate'}).encode('latin')
+ 
+    def cert_is_valid(self, certificate):
+        now = datetime.now()
+        logger.info(f'Certificate validity: valid not before {certificate.not_valid_before} and not after {certificate.not_valid_after}')
+        if certificate.not_valid_before < now and now < certificate.not_valid_after:
+            logger.info('Valid certificate')
+            return True
+        return False
     
     def verify(self, msg, signature, ip):
         try:

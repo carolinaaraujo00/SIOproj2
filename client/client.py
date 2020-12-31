@@ -38,12 +38,11 @@ DIGEST = ['SHA256', 'SHA512', 'BLAKE2b', 'SHA3_256', 'SHA3_512']
 
 class Client():
     def __init__(self):
-        self.ip = f'{random.randrange(256)}.{random.randrange(256)}.{random.randrange(256)}.{random.randrange(256)}'
-        # self.ip = "221.175.231.95"
 
         self.hardware_token = HardwareToken()
 
         certs = self.hardware_token.get_chain_certs()
+        self.get_identifier(certs[0])
 
         response = self.send_to_server(f'{SERVER_URL}/api/hello', certs)
         logger.info(response.json()['msg'])
@@ -78,7 +77,13 @@ class Client():
         
         self.code = self.license()
     
-    # TODO alterar
+    def get_identifier(self, cert):
+        c = x509.load_der_x509_certificate(binascii.a2b_base64(cert.encode('latin')))
+        id_ = c.subject.__str__()
+        h = hashes.Hash(hashes.SHA256())
+        h.update(str.encode(id_))
+        self.id = binascii.b2a_base64(h.finalize()).decode('latin').strip()
+
     def license(self):
         data = self.send_msg('auth', f'{SERVER_URL}/api/license', '')
                 
@@ -113,7 +118,7 @@ class Client():
             
 
     def get_protocols_from_server(self):
-        req_protocols = requests.get(f'{SERVER_URL}/api/protocols', headers={'ip' : self.ip})
+        req_protocols = requests.get(f'{SERVER_URL}/api/protocols', headers={'id' : self.id})
         if req_protocols.status_code == 200:
             logger.info('Got Protocols List')
 
@@ -168,7 +173,7 @@ class Client():
         
     def send_to_server(self, uri, msg):
         data = json.dumps(msg, indent=4).encode('latin')
-        return requests.post(uri, data = data, headers={'ip' : self.ip})
+        return requests.post(uri, data = data, headers={'id' : self.id})
         
     def dhe(self):
         p = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF
@@ -439,7 +444,7 @@ class Client():
         
     """ Proj3 """
     def trust_server(self):
-        response = requests.get(f'{SERVER_URL}/api/cert', headers={'ip' : self.ip})
+        response = requests.get(f'{SERVER_URL}/api/cert', headers={'id' : self.id})
         data = response.json()
         cert = binascii.a2b_base64(data['cert'].encode('latin'))
         self.cert = x509.load_pem_x509_certificate(cert, backend = default_backend())
@@ -542,14 +547,14 @@ def main():
     # TODO encriptar o codigo client.code
     h = hmac.HMAC(client.key, client.hash_, backend = default_backend())
     h.update(client.code)
-    req = requests.get(f'{SERVER_URL}/api/list', headers={'ip' : client.ip, 'Authorization' : client.send_msg("header", None, binascii.b2a_base64(h.finalize()).decode('latin').strip())})
+    req = requests.get(f'{SERVER_URL}/api/list', headers={'id' : client.id, 'Authorization' : client.send_msg("header", None, binascii.b2a_base64(h.finalize()).decode('latin').strip())})
     
     if req.status_code != 200:
         logger.info(client.msg_received(req.json()))
         client.code = client.new_license()
         h = hmac.HMAC(client.key, client.hash_, backend = default_backend())
         h.update(client.code)
-        req = requests.get(f'{SERVER_URL}/api/list', headers={'ip' : client.ip, 'Authorization' : client.send_msg("header", None, binascii.b2a_base64(h.finalize()).decode('latin').strip())})
+        req = requests.get(f'{SERVER_URL}/api/list', headers={'id' : client.id, 'Authorization' : client.send_msg("header", None, binascii.b2a_base64(h.finalize()).decode('latin').strip())})
     
     media_list = client.msg_received(req.json())
     
@@ -594,7 +599,7 @@ def main():
         # rodar chave a cada 10 chunks
         client.rotate_key()
 
-        req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'ip' : client.ip})
+        req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'id' : client.id})
         
         if req.status_code != 200:
             logger.info(client.msg_received(req.json()))

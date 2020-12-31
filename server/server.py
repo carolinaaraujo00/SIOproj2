@@ -213,7 +213,6 @@ class MediaServer(resource.Resource):
             return self.derive_shared_key(shared_key, self.clients[id_]['hash'], 24, None, b'handshake data')
         
     def derive_shared_key(self, shared_key, algorithm, length, salt, info):
-        # TODO utilizar PBKDF2HMAC talvez seja mais seguro
         derived_key = HKDF(
             algorithm=algorithm,
             length=length,
@@ -659,7 +658,6 @@ class MediaServer(resource.Resource):
     # Handle a GET request
     def render_GET(self, request):
         logger.debug(f'Received request for {request.uri}')
-        # TODO informação sensível deve ir por POST
         if not request.getHeader('id') in self.clients:
             request.setResponseCode(401)
             request.responseHeaders.addRawHeader(b"content-type", b"application/json")

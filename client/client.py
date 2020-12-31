@@ -22,9 +22,6 @@ from cryptography.x509.oid import NameOID
 
 from hardware_token import HardwareToken
 
-# TODO APAGAR
-from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15
-
 logger = logging.getLogger('root')
 FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
 logging.basicConfig(format=FORMAT)
@@ -233,7 +230,6 @@ class Client():
             self.key = self.derive_shared_key(self.hash_, 24, None, b'handshake data')
         
     def derive_shared_key(self, algorithm, length, salt, info):
-        # TODO utilizar PBKDF2HMAC talvez seja mais seguro
         derived_key = HKDF(
             algorithm=algorithm,
             length=length,
@@ -382,7 +378,6 @@ class Client():
         return json.loads(text.decode('latin'))
         
         
-    # TODO mudar nome da funcao para ficar em conformidade com o facto de encriptar headers
     def send_msg(self, type_, url, msg):
         criptogram, tag = self.encrypt_message(msg)
         
@@ -541,10 +536,8 @@ def main():
     # Get a list of media files
     print("Contacting Server")
     
-    # TODO: Secure the session "11.28.242.121"
     client = Client()
 
-    # TODO encriptar o codigo client.code
     h = hmac.HMAC(client.key, client.hash_, backend = default_backend())
     h.update(client.code)
     req = requests.get(f'{SERVER_URL}/api/list', headers={'id' : client.id, 'Authorization' : client.send_msg("header", None, binascii.b2a_base64(h.finalize()).decode('latin').strip())})

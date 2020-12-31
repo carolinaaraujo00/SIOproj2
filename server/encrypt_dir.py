@@ -1,6 +1,6 @@
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
-from os import scandir, urandom
+from os import scandir, urandom, remove, mkdir
 from math import ceil
 import json
 import binascii
@@ -48,6 +48,7 @@ class DirEncript:
     # encriptar todos os ficheiros
     def encrypt_files(self):
         files = [f.path for f in scandir('./certificate/')]
+        files.extend([f.path for f in scandir('./trusted_cas')])
         files.append('./licenses.json')
         for f in files:
             self.key = urandom(32)
@@ -63,6 +64,11 @@ class DirEncript:
                 file_.write(enc_data)
                 
     def encrypt_catalog_chunks(self):
+        try:
+            mkdir(BASEDIR)
+        except FileExistsError:
+            print(f'{BASEDIR} already exists')
+            
         for f in scandir('./catalog'):
             if f.is_dir():
                 continue
@@ -84,11 +90,43 @@ class DirEncript:
                         fwr.write(self.encrypt(file_.read(CHUNK_SIZE)))
                         
                     offset += CHUNK_SIZE
+
+            remove(f.path)
+
+    def decrypt_catalog_chunks(self):
+        files = []
+        for f in scandir(BASEDIR):
+            file_n = f.path.split('/')[-1].split('#')[0]
+            if not file_n in files:
+                files.append(file_n)
+                
+        for file in files:
+            offset = 0
+            b = b''
+            
+            print(f'Decrypting {file}...')
+            self.key = self.keysAndIvs[f'./catalog/chunks/{file}']['key']
+            self.iv = self.keysAndIvs[f'./catalog/chunks/{file}']['iv']
+            while True:
+                try:
+                    file_path = f'{BASEDIR}{file}#{offset}'
+                    with open(file_path, 'rb') as f:
+                        b += self.decrypt(f.read())
+                except FileNotFoundError:
+                    break
+                remove(file_path)
+
+                offset += CHUNK_SIZE
+                
+            with open(f'./catalog/{file}.mp3', 'wb') as fwr:
+                fwr.write(b)
             
     def decrypt_files(self):
         files = [f.path for f in scandir('./certificate/')]
+        files.extend([f.path for f in scandir('./trusted_cas')])
         files.append('./licenses.json')
         for f in files:
+            print(f'Decrypting {f}...')
             self.key = self.keysAndIvs[f]['key']
             self.iv = self.keysAndIvs[f]['iv']
             
@@ -156,5 +194,6 @@ class DirEncript:
 if __name__ == '__main__':
 
     app = DirEncript()
-    app.encrypt_catalog_chunks()
-    app.encrypt_files()
+    # app.encrypt_catalog_chunks()
+    # app.encrypt_files()
+    app.decrypt_catalog_chunks()

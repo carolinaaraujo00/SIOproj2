@@ -7,9 +7,10 @@ import subprocess
 import time
 import sys
 import random
+import datetime
 
 from cryptography.hazmat.primitives import hashes, hmac
-from cryptography.hazmat.primitives.asymmetric import dh
+from cryptography.hazmat.primitives.asymmetric import dh, rsa
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
@@ -17,6 +18,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.exceptions import InvalidSignature
+from cryptography.x509.oid import NameOID
 
 from hardware_token import HardwareToken
 
@@ -33,14 +35,13 @@ DIGEST = ['SHA256', 'SHA512', 'BLAKE2b', 'SHA3_256', 'SHA3_512']
 
 class Client():
     def __init__(self):
-        
-        self.ip = f'{random.randrange(256)}.{random.randrange(256)}.{random.randrange(256)}.{random.randrange(256)}'
 
         self.hardware_token = HardwareToken()
 
         certs = self.hardware_token.get_chain_certs()
+        self.get_identifier(certs[0])
 
-        response = self.send_to_server(f'{SERVER_URL}/api/hello', certs, False, False)
+        response = self.send_to_server(f'{SERVER_URL}/api/hello', certs)
         logger.info(response.json()['msg'])
         if response.status_code != 200:
             exit(1)
@@ -49,17 +50,19 @@ class Client():
             logger.error('Certificate of http server is not trusted')
             sys.exit(1)
 
-        self.make_ass_cipher()
-            
         logger.info('Certificate of http server is trusted')
+
+        self.challenge()
                 
         self.tag = None
         self.chosen_mode = None
         self.server_protocols = self.get_protocols_from_server()
         chosen_protocols = self.choose_protocol()
         
+        chosen_protocols = json.dumps(chosen_protocols).encode('latin')
+        
         # enviar para o servidor os protocolos escolhidos
-        self.send_to_server(f'{SERVER_URL}/api/protocol_choice', chosen_protocols)
+        self.send_to_server(f'{SERVER_URL}/api/protocol_choice', {'msg' : chosen_protocols.decode('latin'), 'signature' : self.hardware_token.sign(chosen_protocols)})
         
         self.set_hash_algo()
         
@@ -69,21 +72,61 @@ class Client():
         # derivar a chave partilhada de acordo com cifra utilizada
         self.get_key()
         
-        data = self.authn()
-        self.code = binascii.a2b_base64(self.decrypt_message(data).encode('latin'))
-        
+        self.code = self.license()
     
-    # TODO alterar
-    def authn(self):
-        username = input('\nusername: ')
-        return self.send_msg('auth', f'{SERVER_URL}/api/authn', username)
+    def get_identifier(self, cert):
+        c = x509.load_der_x509_certificate(binascii.a2b_base64(cert.encode('latin')))
+        id_ = c.subject.__str__()
+        h = hashes.Hash(hashes.SHA256())
+        h.update(str.encode(id_))
+        self.id = binascii.b2a_base64(h.finalize()).decode('latin').strip()
+
+    def license(self):
+        data = self.send_msg('auth', f'{SERVER_URL}/api/license', '')
+                
+        if not self.check_integrity(data['msg'], data['mac']):
+            return None
+
+        if data['type'] == 'sucess':
+            return binascii.a2b_base64(self.decrypt_message(data).encode('latin'))
+
+        logger.error(self.decrypt_message(data))
+
+        return self.new_license()
+
+    def new_license(self):
+        resp = ''
+        while True:
+            resp = input('Get new license(y/n)?')
+            
+            if resp.lower() in 'yn':
+                break
+        
+        if resp == 'y':
+            data = self.send_msg('newlicense', f'{SERVER_URL}/api/newlicense', '')
+            if data['type'] == 'error':
+                logger.error(self.decrypt_message(data))
+                exit(1)
+            return binascii.a2b_base64(self.decrypt_message(data).encode('latin'))
+
+        print('No license, no party...')
+        print('bye')
+        exit(0)
+            
 
     def get_protocols_from_server(self):
-        req_protocols = requests.get(f'{SERVER_URL}/api/protocols', headers={'ip' : self.ip})
+        req_protocols = requests.get(f'{SERVER_URL}/api/protocols', headers={'id' : self.id})
         if req_protocols.status_code == 200:
             logger.info('Got Protocols List')
 
-        protocols_avail = req_protocols.json()
+        data = req_protocols.json()
+        
+        protocols_avail = data['msg'].encode('latin')
+        if not self.verify(protocols_avail, binascii.a2b_base64(data['signature'].encode('latin'))):
+            logger.error('Signature failed when checking server protocols.')
+    
+        protocols_avail = json.loads(protocols_avail.decode('latin'))
+    
         logger.info(f'Available protocols in the server:\n\tAlgorithms: {protocols_avail["algorithms"]}\n\tModes: {protocols_avail["modes"]}\n\tDigests: {protocols_avail["digests"]}')
 
         return protocols_avail
@@ -125,23 +168,9 @@ class Client():
         print('###############################')            
         return list_[selection]
         
-    def send_to_server(self, uri, msg, bytes_=False, encript=True):
-        
-        if bytes_:
-            data = msg
-        else:
-            data = json.dumps(msg, indent=4).encode('latin')
-        
-        print(data)
-        if encript:
-            data = self.cert.public_key().encrypt(data, 
-                        padding = padding.OAEP(
-                            mgf=padding.MGF1(algorithm=self.cert.signature_hash_algorithm),
-                            algorithm=self.cert.signature_hash_algorithm,
-                            label=None
-                        )
-                    )        
-        return requests.post(uri, data = data, headers={'ip' : self.ip})
+    def send_to_server(self, uri, msg):
+        data = json.dumps(msg, indent=4).encode('latin')
+        return requests.post(uri, data = data, headers={'id' : self.id})
         
     def dhe(self):
         p = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF
@@ -158,13 +187,13 @@ class Client():
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
         
-        msg = {
+        msg = json.dumps({
             "p" : p,
             "g" : g,
             "pk" : binascii.b2a_base64(data).decode('latin').strip()
-        }
+        }).encode('latin')
         # enviar chave publica dh para o servidor        
-        request = self.send_to_server(f'{SERVER_URL}/api/dh_client_public_key', msg, False, False)
+        request = self.send_to_server(f'{SERVER_URL}/api/dh_client_public_key', {'msg' : msg.decode('latin'), 'signature' : self.hardware_token.sign(msg)})
         server_public_key = binascii.a2b_base64(request.json()['key'].encode('latin'))
         
         server_public_key = serialization.load_der_public_key(server_public_key, backend=default_backend())
@@ -183,9 +212,10 @@ class Client():
         )
         
         msg = {"pk" : binascii.b2a_base64(data).decode('latin').strip()}
-        request = self.send_to_server(f'{SERVER_URL}/api/rotatekey', msg, False, False)
-        
-        server_public_key = binascii.a2b_base64(request.json()['key'].encode('latin'))
+        response = self.send_msg('rotate', f'{SERVER_URL}/api/rotatekey', msg)
+        response = self.msg_received(response)
+
+        server_public_key = binascii.a2b_base64(response['key'].encode('latin'))
         server_public_key = serialization.load_der_public_key(server_public_key, backend=default_backend())
         
         self.shared_key = private_key.exchange(server_public_key)
@@ -200,7 +230,6 @@ class Client():
             self.key = self.derive_shared_key(self.hash_, 24, None, b'handshake data')
         
     def derive_shared_key(self, algorithm, length, salt, info):
-        # TODO utilizar PBKDF2HMAC talvez seja mais seguro
         derived_key = HKDF(
             algorithm=algorithm,
             length=length,
@@ -349,9 +378,7 @@ class Client():
         return json.loads(text.decode('latin'))
         
         
-    # TODO mudar nome da funcao para ficar em conformidade com o facto de encriptar headers
     def send_msg(self, type_, url, msg):
-        logger.info(f'A enviar mensagem para servidor: {msg}')
         criptogram, tag = self.encrypt_message(msg)
         
         h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
@@ -375,12 +402,12 @@ class Client():
         if type_ == "header":
             return json.dumps(json_message)
                     
-        req = self.send_to_server(url, json_message, False, False)
+        req = self.send_to_server(url, json_message)
         
         if req.status_code == 200:
             return req.json()
         else:
-            logger.error('A resposta do servidor na foi ok')
+            logger.error('Response from server not ok')
             
     def check_integrity(self, msg, mac):
         h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
@@ -388,11 +415,11 @@ class Client():
 
         try:
             h.verify(binascii.a2b_base64(mac.encode('latin')))
-            logger.info("A mensagem chegou sem problemas :)")
+            logger.info("Integrity of message verified :)")
             return True
 
         except InvalidSignature:
-            logger.error("A mensagem foi corrompida a meio do caminho.")
+            logger.error("Received corrupted message :(")
             return False
             
     def msg_received(self, data):        
@@ -402,12 +429,9 @@ class Client():
         if data['type'] == "data_list":
             return self.decrypt_message(data)
         elif data['type'] == 'data_download':
-            data = self.decrypt_message(data)
-            
-            # verificar a assinatura
-            if not self.verify_chunk(binascii.a2b_base64(data['data'].encode('latin')), binascii.a2b_base64(data['signature'].encode('latin'))):
-                return None
-            return data
+            return self.decrypt_message(data)
+        elif data['type'] == 'rotate':
+            return self.decrypt_message(data)
         elif data['type'] == "error":
             return self.decrypt_message(data)['error']
         else:
@@ -415,17 +439,37 @@ class Client():
         
     """ Proj3 """
     def trust_server(self):
-        response = requests.get(f'{SERVER_URL}/api/cert', headers={'ip' : self.ip})
-        cert = binascii.a2b_base64(response.json()['cert'].encode('latin'))
+        response = requests.get(f'{SERVER_URL}/api/cert', headers={'id' : self.id})
+        data = response.json()
+        cert = binascii.a2b_base64(data['cert'].encode('latin'))
         self.cert = x509.load_pem_x509_certificate(cert, backend = default_backend())
 
-        # TODO fazer corrente de CA's
         for c in self.trusted_ca():
             if self.cert.issuer == c.subject:
-                return True
+                logger.info(f'A trusted certificate has been found.')
+                if self.cert_is_valid(self.cert):
+                    if self.cert_check_CN(self.cert, data['server_name']):
+                        return True
         
         return False
 
+    def cert_is_valid(self, certificate):
+        now = datetime.datetime.now()
+        logger.info(f'Certificate validity: valid not before {certificate.not_valid_before} and not after {certificate.not_valid_after}')
+        if certificate.not_valid_before < now and now < certificate.not_valid_after:
+            logger.info('Valid certificate')
+            return True
+        return False
+    
+    def cert_check_CN(self, cert, server_name):
+        cert_name = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+        logger.info(f'The common name of certificate is {cert_name} and the server name {server_name}.')
+        if cert_name == server_name:
+            logger.info('Common name of cert and server name are consistent, meaning valid.')
+            return True
+        
+        return False
+    
     def trusted_ca(self):
         ret = []
         for f in os.scandir('./trusted_ca'):
@@ -434,7 +478,7 @@ class Client():
                 
         return ret
     
-    def verify_chunk(self, data, signature):
+    def verify(self, data, signature):
         try:
             self.cert.public_key().verify(
                 signature,
@@ -445,16 +489,45 @@ class Client():
                 ),
                 hashes.SHA256()
             )
+            logger.info('Valid signature')
         except InvalidSignature:
-            logger.error('Signature of chunk not valid')
+            logger.error('Signature failed')
             return False
         
         return True
-    
-    def make_ass_cipher(self):
-        pass
+                
+    def challenge(self):
+        challenge = os.urandom(16)
+
+        response = self.send_to_server(f'{SERVER_URL}/api/challenge', {'msg' : binascii.b2a_base64(challenge).decode('latin').strip(), 'signature' : self.hardware_token.sign(challenge)})
+        if response.status_code != 200:
+            logger.error(f'{response.json()["msg"]}')
+            exit(1)
+
+        data = response.json()
+        msg = binascii.a2b_base64(data['msg'].encode('latin'))
+        if not self.verify(msg, binascii.a2b_base64(data['signature'].encode('latin'))):
+            logger.error('The signature verification for server public key failed.')
+            print('Bye')
+            exit(1)
+            
+        data = json.loads(msg.decode('latin'))
         
-    
+        if self.verify(challenge, binascii.a2b_base64(data['signed_challenge'].encode('latin'))):
+            logger.info('Server signed correctly the challenge.')
+        else:
+            logger.info('The verification of the signed challenge failed.')
+            print('I\'m out. This connection isn\'t secure...')
+            exit(1)
+        
+        signed_server_challenge = self.hardware_token.sign(binascii.a2b_base64(data['server_challenge'].encode('latin')))
+
+        signed = binascii.a2b_base64(signed_server_challenge.encode('latin'))
+
+        signature = self.hardware_token.sign(signed)
+
+        self.send_to_server(f'{SERVER_URL}/api/authenticate', {'signed_challenge' : signed_server_challenge, 'signature' : signature})    
+
 def main():
     print("|--------------------------------------|")
     print("|         SECURE MEDIA CLIENT          |")
@@ -463,16 +536,18 @@ def main():
     # Get a list of media files
     print("Contacting Server")
     
-    # TODO: Secure the session "11.28.242.121"
     client = Client()
 
-    # TODO encriptar o codigo client.code
     h = hmac.HMAC(client.key, client.hash_, backend = default_backend())
     h.update(client.code)
-    req = requests.get(f'{SERVER_URL}/api/list', headers={'ip' : client.ip, 'Authorization' : client.send_msg("header", None, binascii.b2a_base64(h.finalize()).decode('latin').strip())})
+    req = requests.get(f'{SERVER_URL}/api/list', headers={'id' : client.id, 'Authorization' : client.send_msg("header", None, binascii.b2a_base64(h.finalize()).decode('latin').strip())})
     
-    if req.status_code == 200:
-        print("Got Server List")
+    if req.status_code != 200:
+        logger.info(client.msg_received(req.json()))
+        client.code = client.new_license()
+        h = hmac.HMAC(client.key, client.hash_, backend = default_backend())
+        h.update(client.code)
+        req = requests.get(f'{SERVER_URL}/api/list', headers={'id' : client.id, 'Authorization' : client.send_msg("header", None, binascii.b2a_base64(h.finalize()).decode('latin').strip())})
     
     media_list = client.msg_received(req.json())
     
@@ -515,19 +590,16 @@ def main():
     # Get data from server and send it to the ffplay stdin through a pipe
     for chunk in range(media_item['chunks'] + 1):
         # rodar chave a cada 10 chunks
-        if chunk%10 == 0:
-            client.rotate_key()
+        client.rotate_key()
 
-        h = hmac.HMAC(client.key, client.hash_, backend = default_backend())
-        h.update(client.code)
-        req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'ip' : client.ip, 'Authorization' : client.send_msg("header", None, binascii.b2a_base64(h.finalize()).decode('latin').strip())})
-        # req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'Authorization' : client.send_msg("header", None, binascii.b2a_base64(b'error').decode('latin').strip())})
-
-        if req.status_code == 401:
-            logger.error('License was not accepted')
+        req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'id' : client.id})
+        
+        if req.status_code != 200:
+            logger.info(client.msg_received(req.json()))
+            logger.info('Ending client session...')
             proc.kill()
             break
-        
+                
         chunk = client.msg_received(req.json())
         
         try:

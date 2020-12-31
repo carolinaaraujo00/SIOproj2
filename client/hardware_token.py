@@ -28,7 +28,7 @@ class HardwareToken:
         self.mechanism = PyKCS11.Mechanism(PyKCS11.CKM_SHA1_RSA_PKCS, None)
 
     def sign(self, msg):
-        return self.session.sign(self.private_key, msg, self.mechanism)
+        return binascii.b2a_base64(bytes(self.session.sign(self.private_key, msg, self.mechanism))).decode('latin').strip()
 
     def get_chain_certs(self):
         certs = ['CITIZEN AUTHENTICATION CERTIFICATE', 'AUTHENTICATION SUB CA', 'ROOT CA']
@@ -59,7 +59,7 @@ if __name__ == '__main__':
 
     b_cert = token.get_chain_certs()[0]
 
-    cert = x509.load_der_x509_certificate(b_cert, backend=default_backend())
+    cert = x509.load_der_x509_certificate(binascii.a2b_base64(b_cert.encode('latin')), backend=default_backend())
 
     content = b'ola            '
 
@@ -67,7 +67,7 @@ if __name__ == '__main__':
 
     try:
         result = cert.public_key().verify(
-            bytes(signature),
+            binascii.a2b_base64(signature.encode('latin')),
             content,
             PKCS1v15(),
             hashes.SHA1(),

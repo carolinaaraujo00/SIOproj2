@@ -8,6 +8,7 @@ import json
 import os
 import math
 
+import argparse
 import getpass
 from datetime import datetime
 import time
@@ -722,14 +723,24 @@ class MediaServer(resource.Resource):
 
 print("Server started")
 print("URL is: http://IP:8080")
-""" Usar ficheiros encriptados """
-s = server.Site(MediaServer())
 
-""" Encriptar ficheiros """
-# s = server.Site(MediaServer('encrypt'))
+parser = argparse.ArgumentParser(description='Project 2/3 SIO')
+parser.add_argument('-e', help='encrypt files', action='store_true')
+parser.add_argument('-d', help='decrypt files', action='store_true')
 
-""" Decriptar ficheiros """
-# s = server.Site(MediaServer('decrypt'))
+args = parser.parse_args()
+
+if not args.e and not args.d:
+    """ Usar ficheiros encriptados """
+    s = server.Site(MediaServer())
+elif args.e:
+    """ Encriptar ficheiros """
+    s = server.Site(MediaServer('encrypt'))
+elif args.d:
+    """ Decriptar ficheiros """
+    s = server.Site(MediaServer('decrypt'))
+else:
+    print('Error parsing arguments.')
 
 reactor.listenTCP(8080, s)
 reactor.run()

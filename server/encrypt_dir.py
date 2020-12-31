@@ -1,6 +1,6 @@
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
-from os import scandir, urandom, remove
+from os import scandir, urandom, remove, mkdir
 from math import ceil
 import json
 import binascii
@@ -64,6 +64,11 @@ class DirEncript:
                 file_.write(enc_data)
                 
     def encrypt_catalog_chunks(self):
+        try:
+            mkdir(BASEDIR)
+        except FileExistsError:
+            print(f'{BASEDIR} already exists')
+            
         for f in scandir('./catalog'):
             if f.is_dir():
                 continue

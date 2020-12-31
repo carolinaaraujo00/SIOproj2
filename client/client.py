@@ -408,6 +408,7 @@ class Client():
             return req.json()
         else:
             logger.error('Response from server not ok')
+            return None
             
     def check_integrity(self, msg, mac):
         h = hmac.HMAC(self.key, self.hash_, backend = default_backend())
@@ -592,15 +593,23 @@ def main():
         # rodar chave a cada 10 chunks
         client.rotate_key()
 
-        req = requests.get(f'{SERVER_URL}/api/download?id={media_item["id"]}&chunk={chunk}', headers={'id' : client.id})
+        req = client.send_msg('download', f'{SERVER_URL}/api/download', {'id' : media_item["id"], 'chunk' : chunk})
         
-        if req.status_code != 200:
-            logger.info(client.msg_received(req.json()))
+        if not req:
+            logger.info('Error downloading chunk')
             logger.info('Ending client session...')
             proc.kill()
             break
-                
-        chunk = client.msg_received(req.json())
+        
+        data_chunk = client.msg_received(req)
+
+        if type(data_chunk).__name__ == 'str':
+            logger.info(data_chunk)
+            logger.info('Ending client session...')
+            proc.kill()
+            break
+
+        chunk = data_chunk
         
         try:
             data = binascii.a2b_base64(chunk['data'].encode('latin'))

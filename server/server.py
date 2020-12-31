@@ -592,15 +592,15 @@ class MediaServer(resource.Resource):
         return self.send_response(request, "data_list", media_list)
 
     # Send a media chunk to the client
-    def do_download(self, request):       
+    def do_download(self, request, data):       
         if not request.getHeader('id') in self.can_download:
             request.setResponseCode(401)
             logger.error(f'{request.getHeader("id")} is not authorized to do download.')
             return self.send_response(request, "error", {'error': 'Not authorized to do download.'})
 
-        logger.debug(f'Download: args: {request.args}')
+        logger.debug(f'Download: args: {data}')
         
-        media_id = request.args.get(b'id', [None])[0]
+        media_id = data['id']
         logger.debug(f'Download: id: {media_id}')
 
         # Check if the media_id is not None as it is required
@@ -609,7 +609,7 @@ class MediaServer(resource.Resource):
             return self.send_response(request, "error", {'error': 'invalid media id'})
         
         # Convert bytes to str
-        media_id = media_id.decode('latin')
+        # media_id = media_id.decode('latin')
 
         # Search media_id in the catalog
         if media_id not in CATALOG:
@@ -620,16 +620,13 @@ class MediaServer(resource.Resource):
         media_item = CATALOG[media_id]
 
         # Check if a chunk is valid
-        chunk_id = request.args.get(b'chunk', [b'0'])[0]
+        chunk_id = data['chunk']
 
         valid_chunk = False
-        try:
-            chunk_id = int(chunk_id.decode('latin'))
-            if chunk_id >= 0 and chunk_id  < math.ceil(media_item['file_size'] / CHUNK_SIZE):
-                valid_chunk = True
-        except:
-            logger.warn("Chunk format is invalid")
 
+        if chunk_id >= 0 and chunk_id  < math.ceil(media_item['file_size'] / CHUNK_SIZE):
+            valid_chunk = True
+            
         # remover cliente da lista de clientes que podem fazer download
         if chunk_id == math.ceil(media_item['file_size'] / CHUNK_SIZE):
             self.can_download.remove(request.getHeader('id'))
@@ -670,8 +667,8 @@ class MediaServer(resource.Resource):
                 return self.cert(request)
             elif request.path == b'/api/list':
                 return self.do_list(request)
-            elif request.path == b'/api/download':
-                return self.do_download(request)
+            # elif request.path == b'/api/download':
+            #     return self.do_download(request)
             else:
                 request.responseHeaders.addRawHeader(b"content-type", b'text/plain')
                 return b'Methods: /api/protocols /api/list /api/download'
@@ -714,6 +711,12 @@ class MediaServer(resource.Resource):
                 self.authenticate(request, data)
             elif request.path == b'/api/newlicense':
                 return self.new_license(request)
+            elif request.path == b'/api/download':
+                data = json.loads(content.decode('latin'))
+                if not self.check_integrity(data['msg'], data['mac'], request.getHeader('id')):
+                    return self.send_response(request, "error", {'error': 'Corrupted Message'})
+                data = self.decrypt_message(data, request.getHeader('id'))
+                return self.do_download(request, data)
         
         except Exception as e:
             logger.exception(e)

@@ -68,8 +68,6 @@ MODES = ['CBC', 'OFB', 'CFB', 'GCM']
 DIGEST = ['SHA256', 'SHA512', 'BLAKE2b', 'SHA3_256', 'SHA3_512']
 
 
-# TODO PODE SER ALTERADO PARA UMA PASSWORD
-KEY = b'\xc4\x8e*&\xf2 \x9c\xdd\xfb7Z\xed\x0fm*\xed}}\x18\xc6!\xb2\x9e\x0b\xef\x88\x92\xbfs\x87L9'
 IV = b'\xb6^\xc9\xde\x1e\xe7\xa2<\x00<\x80w\x02\x1e\xee\xf7'
 
 class MediaServer(resource.Resource):
@@ -103,6 +101,7 @@ class MediaServer(resource.Resource):
             print('Password to decrypt files...')
             key = self.encrypt_password()
             self.file_encryptor.load_keys_and_ivs(key, IV)
+            self.file_encryptor.decrypt_catalog_chunks()
             self.file_encryptor.decrypt_files()
             print('Files decrypted. Soo bye bye...')
             exit(0)

@@ -1,0 +1,44 @@
+title Projeto 2/3
+
+entryspacing 0.7
+Client->Server:{/api/hello} enviar cadeia de certificados para o servidor os verificar
+Client<--Server:resposta a confirmar ou negar a aceitação do certificado do cliente
+
+Client->Server:{/api/cert} pedir ao servidor o seu certificado
+Client<--Server:resposta do servidor com o seu certificado
+
+Client->Server:{/api/challenge} enviar desafio para o servidor com assinatura
+Client<--Server:verifica autenticidade de desafio e responde com o desafio assinado pela sua chave privada, juntamente envia o seu desafio para o cliente e uma assinatura da mensagem
+
+Client->Server:{/api/authenticate} cliente verifica autenticidade da mensagem, verifica assinatura do servidor, e responde ao servidor assinando também o seu desafio
+
+Client->Server:{/api/protocols} pedir protocolos suportados pelo servidor
+Client<--Server:resposta com os protocolos
+
+Client->Server:{/api/protocol_choice} enviar a escolha de protocolos
+
+Client->Server:{/api/dh_client_public_key} enviar informação para criar chave deffie-hellman
+Client<--Server:resposta com a chave pública dh criada do lado do servidor
+
+Client->Server:{/api/license} verificar se possui licença
+Client<--Server:resposta com resultado
+space
+space
+alt caso o cliente não possua licença e pretenda adquirir uma, ou caso tenha expirado e queira renovar
+Client->Server:{/api/newlicense} pedido de uma nova licença
+Client<--Server:resposta com resultado
+end
+space 
+space
+Client->Server:{/api/list} pedido com a lista das músicas disponíveis
+alt caso se verifique que o cliente tem uma licença válida e ativa
+Client<--Server:resposta com lista de músicas
+end
+space
+space
+loop chunk_id < ceil(media_item_size / BLOCK_SIZE)
+Client->Server:{/api/rotatekey} alterar o valor da chave utilizada na cifra simétrica, enviando pk_dh do cliente
+Client<--Server:resposta com pk_dh
+Client->Server:{/api/download} pedido duma determinada chunk
+Client<--Server:retorno do conteúdo pedido
+end
